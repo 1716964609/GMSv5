@@ -1,0 +1,86 @@
+@startuml
+title GMS v5 Use Case Diagram
+left to right direction
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+actor "訪問者" as Visitor
+actor "有効ユーザー" as User
+actor "メール未認証ユーザー" as Pending
+actor "DeepL API" as DeepL
+actor "OpenAI API" as OpenAI
+actor "認証サービス" as IdentityProvider
+
+rectangle "GMS v5" {
+  package "公開・認証" as PublicAuth {
+    usecase "UC-001\n公開ランディングページを閲覧する" as UC001
+    usecase "UC-002\n新規アカウントを登録する" as UC002
+    usecase "UC-003\nメールアドレスを認証する" as UC003
+    usecase "UC-004\nログイン・ログアウトする" as UC004
+    usecase "UC-005\nパスワードを再設定する" as UC005
+  }
+
+  package "用語管理" as GlossaryManagement {
+    usecase "UC-006\n用語集を閲覧・管理する" as UC006
+    usecase "UC-007\n用語を閲覧・管理する" as UC007
+    usecase "UC-008\n用語を検索する" as UC008
+    usecase "UC-009\n一覧のページを切り替える" as UC009
+    usecase "UC-010\nJSONから用語集をインポートする" as UC010
+  }
+
+  package "翻訳" as Translation {
+    usecase "UC-011\n翻訳用の用語を選択する" as UC011
+    usecase "UC-012\n用語集を使用して翻訳する" as UC012
+    usecase "UC-013\n最終訳文をTXTでダウンロードする" as UC013
+  }
+
+  package "設定・アカウント削除" as AccountManagement {
+    usecase "UC-014\nプロフィールとパスワードを変更する" as UC014
+    usecase "UC-015\nAPI認証情報を管理する" as UC015
+    usecase "UC-016\nアカウント削除を要求する" as UC016
+  }
+
+  package "内部ライフサイクル処理" as Lifecycle {
+    usecase "UC-018\n内部保持期間終了後にアカウントを恒久削除する" as UC018
+  }
+
+  PublicAuth -[hidden]right- GlossaryManagement
+  GlossaryManagement -[hidden]right- Translation
+  Translation -[hidden]right- AccountManagement
+  AccountManagement -[hidden]right- Lifecycle
+}
+
+Visitor -- UC001
+Visitor -- UC002
+Visitor -- UC004
+Visitor -- UC005
+Pending -- UC003
+
+User -- UC004
+User -- UC005
+User -- UC006
+User -- UC007
+User -- UC008
+User -- UC009
+User -- UC010
+User -- UC011
+User -- UC012
+User -- UC013
+User -- UC014
+User -- UC015
+User -- UC016
+
+IdentityProvider -- UC002
+IdentityProvider -- UC003
+IdentityProvider -- UC004
+IdentityProvider -- UC005
+IdentityProvider -- UC014
+DeepL -- UC012
+OpenAI -- UC012
+
+note right of UC018
+  30日内部保持期限の到来時に
+  システム内部処理として起動する。
+  外部アクターは置かない。
+end note
+@enduml
