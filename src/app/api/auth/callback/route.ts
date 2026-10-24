@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { authenticateCallback } from "@/lib/auth/cognito";
+import { authenticateCallback, cognitoConfig } from "@/lib/auth/cognito";
 import { upsertExternalUser } from "@/lib/db/repository";
 import { withDatabase } from "@/lib/db/client";
 import { createSessionValue, AUTH_STATE_COOKIE, SESSION_COOKIE, requestCookieValue, sessionCookieOptions } from "@/lib/auth/session";
@@ -27,12 +27,12 @@ export async function GET(request: Request): Promise<Response> {
       }),
     );
     if (user.accountStatus !== "ACTIVE") {
-      const response = NextResponse.redirect(new URL("/?error=email_not_verified", request.url));
+      const response = NextResponse.redirect(new URL("/?error=email_not_verified", cognitoConfig().redirectUri));
       response.cookies.delete(AUTH_STATE_COOKIE);
       return response;
     }
 
-    const response = NextResponse.redirect(new URL("/glossary", request.url));
+    const response = NextResponse.redirect(new URL("/glossary", cognitoConfig().redirectUri));
     response.cookies.set(SESSION_COOKIE, createSessionValue(user), sessionCookieOptions());
     response.cookies.delete(AUTH_STATE_COOKIE);
     return response;
