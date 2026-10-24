@@ -46,7 +46,14 @@ export function AppShell({ children, title }: { children: ReactNode; title: stri
           <Link className="font-semibold" href="/glossary">GMS v5</Link>
           <span className="hidden text-sm text-[#68687a] sm:inline">/ {title}</span>
         </div>
-        <a className="rounded-full border border-[#9b9bc7]/40 px-4 py-2 text-sm font-semibold text-[#565667] hover:bg-[#f7f7fa]" href="/api/auth/logout">ログアウト</a>
+        <form action="/api/auth/logout" method="post">
+          <button
+            type="submit"
+            className="rounded-full border border-[#9b9bc7]/40 px-4 py-2 text-sm font-semibold text-[#565667] hover:bg-[#f7f7fa]"
+          >
+            ログアウト
+          </button>
+        </form>
       </header>
       <div className="relative flex">
         {open && (
