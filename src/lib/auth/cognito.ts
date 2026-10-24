@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 
 import { AppError } from "../domain/errors.ts";
+import { assertPkceVerifier } from "../security/pkce.ts";
 
 type CognitoConfig = {
   domain: string;
@@ -65,6 +66,7 @@ export function createAuthState(): string {
 export function authorizationUrl(
   flow: "login" | "signup" | "reset",
   state: string,
+  codeChallenge?: string,
 ): string {
   const config = cognitoConfig();
   const path = flow === "reset" ? "/forgotPassword" : "/oauth2/authorize";
@@ -74,6 +76,20 @@ export function authorizationUrl(
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("state", state);
+
+  if (flow !== "reset") {
+    if (!codeChallenge || !/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+      throw new AppError(
+        500,
+        "PKCE_CHALLENGE_MISSING",
+        "A valid PKCE challenge is required",
+      );
+    }
+
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("code_challenge", codeChallenge);
+  }
+
   if (flow === "signup") {
     url.searchParams.set("screen_hint", "signup");
   }
@@ -96,12 +112,14 @@ function decodeJson<T>(value: string): T {
   return JSON.parse(decodeBase64Url(value).toString("utf8")) as T;
 }
 
-async function exchangeCode(code: string): Promise<{ id_token: string }> {
+async function exchangeCode(code: string, verifier: string): Promise<{ id_token: string }> {
+  assertPkceVerifier(verifier);
   const config = cognitoConfig();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: config.clientId,
     code,
+    code_verifier: verifier,
     redirect_uri: config.redirectUri,
   });
   if (config.clientSecret) {
@@ -173,9 +191,9 @@ async function verifyIdToken(token: string, config: CognitoConfig): Promise<IdTo
   return claims;
 }
 
-export async function authenticateCallback(code: string): Promise<IdTokenClaims> {
+export async function authenticateCallback(code: string, verifier: string): Promise<IdTokenClaims> {
   const config = cognitoConfig();
-  const token = await exchangeCode(code);
+  const token = await exchangeCode(code, verifier);
   return verifyIdToken(token.id_token, config);
 }
 

@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 export const SESSION_COOKIE = "gms_session";
 export const AUTH_STATE_COOKIE = "gms_auth_state";
+export const PKCE_VERIFIER_COOKIE = "gms_pkce_verifier";
 
 type SessionPayload = {
   userId: string;
