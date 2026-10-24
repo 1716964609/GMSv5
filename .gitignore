@@ -14,3 +14,5 @@ dist/
 *.db
 *.sqlite*
 *.tsbuildinfo
+
+/dist-arm64/
