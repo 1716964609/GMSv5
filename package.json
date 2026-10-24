@@ -15,7 +15,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
     "accounts:purge": "node --experimental-strip-types scripts/purge-accounts.ts",
     "test:db": "node --experimental-strip-types --test test/db-migration.test.ts",

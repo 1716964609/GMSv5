@@ -16,3 +16,4 @@ dist/
 *.tsbuildinfo
 
 /dist-arm64/
+next-env.d.ts
