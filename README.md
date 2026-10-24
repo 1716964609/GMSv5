@@ -82,6 +82,17 @@ npm run build
 npm start
 ```
 
+To apply the local SQLite migration:
+
+```bash
+npm run db:migrate
+npm run test:db
+```
+
+Development defaults to `.data/gmsv5.sqlite`. In production, set
+`GMS_DATABASE_PATH` to an absolute path under the independently mounted data
+volume; the migration command does not use a fallback path in production.
+
 ---
 
 **GMS v5 is an independent software engineering project exploring specification-driven, AI-assisted development and practical cloud infrastructure engineering.**
