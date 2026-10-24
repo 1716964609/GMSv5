@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { withDatabaseAsync } from "@/lib/db/client";
 import { authenticatedUser } from "@/lib/auth/session";
+import { assertSameOriginForMutation } from "@/lib/security/csrf";
 import { errorResponse } from "@/lib/http";
 import type { User } from "@/lib/domain/types";
 
@@ -12,6 +13,7 @@ export async function protectedRequest(
   try {
     return await withDatabaseAsync(async (db) => {
       const user = authenticatedUser(db, request);
+      assertSameOriginForMutation(request);
       return callback(db, user);
     });
   } catch (error) {
