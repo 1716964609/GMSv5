@@ -6,11 +6,11 @@ The application enables users to manage their own terminology collections and pe
 
 ## Project Status
 
-**Work in Progress — Specification and Architecture Design**
+**Work in Progress — Specification, Architecture, and Project Scaffolding**
 
 The requirements, entity model, and use cases have been defined. The initial software architecture has also been drafted.
 
-Application implementation has not yet started.
+Application implementation has not yet started. The minimum Next.js project scaffolding is now in place.
 
 ## Core Features
 
@@ -60,13 +60,27 @@ Specifications serve as the authoritative reference for AI-assisted development.
 | [Entity Model](docs/entity-model.md) | Domain entities and business constraints |
 | [Use Cases](docs/use-cases.md) | System behavior and acceptance criteria |
 | [Use Case Diagram](docs/use-case-diagram.puml) | PlantUML representation of system use cases |
-| [Architecture](architecture.md) | Proposed technical architecture |
+| [Architecture](docs/architecture.md) | Proposed technical architecture |
 
 ## Development Roadmap
 
 Specification → Scaffolding → Database Migration → Use Case Implementation → Automated Testing → Deployment
 
 The project is currently transitioning from specification to implementation.
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+For a production build:
+
+```bash
+npm run build
+npm start
+```
 
 ---
 
