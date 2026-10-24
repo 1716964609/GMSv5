@@ -15,8 +15,13 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
-    "test:db": "node --experimental-strip-types --test test/db-migration.test.ts"
+    "accounts:purge": "node --experimental-strip-types scripts/purge-accounts.ts",
+    "test:db": "node --experimental-strip-types --test test/db-migration.test.ts",
+    "test:usecases": "node --experimental-strip-types --test test/use-cases.test.ts",
+    "test:browserless": "node --experimental-strip-types --test test/browserless.test.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "next": "16.4.3",
@@ -28,6 +33,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@playwright/test": "^1.64.1",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
     "postcss": "^8.5.31",

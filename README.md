@@ -6,11 +6,11 @@ The application enables users to manage their own terminology collections and pe
 
 ## Project Status
 
-**Work in Progress — Specification, Architecture, and Project Scaffolding**
+**Work in Progress — AIUP Step 8 Use Case Implementation**
 
 The requirements, entity model, and use cases have been defined. The initial software architecture has also been drafted.
 
-Application implementation has not yet started. The minimum Next.js project scaffolding is now in place.
+The Next.js project scaffolding, SQLite migration, domain services, Route Handlers, and initial UI for the defined Use Cases are now in place. Cognito, DeepL, and OpenAI require environment configuration and remain externally unverified.
 
 ## Core Features
 
@@ -75,6 +75,15 @@ npm install
 npm run dev
 ```
 
+For static checks and local tests:
+
+```bash
+npm run typecheck
+npm run lint
+npm run test:db
+npm run test:usecases
+```
+
 For a production build:
 
 ```bash
@@ -92,6 +101,10 @@ npm run test:db
 Development defaults to `.data/gmsv5.sqlite`. In production, set
 `GMS_DATABASE_PATH` to an absolute path under the independently mounted data
 volume; the migration command does not use a fallback path in production.
+
+Copy `.env.example` to the deployment environment and configure the Cognito
+Hosted UI, session secret, credential encryption key, and provider endpoints.
+Do not commit secrets or call paid external APIs from local tests.
 
 ---
 

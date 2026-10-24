@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { AppError } from "../domain/errors.ts";
+
 export type DatabaseEnvironment = "development" | "test" | "production";
 
 export type DatabaseHandle = {
@@ -23,18 +25,22 @@ export function resolveDatabasePath(
     "development",
 ): string {
   if (configuredPath !== undefined && configuredPath.trim() === "") {
-    throw new Error("GMS_DATABASE_PATH must not be empty");
+    throw new AppError(503, "DATABASE_NOT_CONFIGURED", "GMS_DATABASE_PATH must not be empty");
   }
 
   if (environment === "production") {
     if (configuredPath === undefined) {
-      throw new Error(
+      throw new AppError(
+        503,
+        "DATABASE_NOT_CONFIGURED",
         "GMS_DATABASE_PATH must be set to an absolute path in production",
       );
     }
 
     if (!isAbsolute(configuredPath)) {
-      throw new Error(
+      throw new AppError(
+        503,
+        "DATABASE_NOT_CONFIGURED",
         "GMS_DATABASE_PATH must be an absolute path in production",
       );
     }
@@ -55,7 +61,9 @@ export function openDatabase(
 
   if (environment === "production") {
     if (!existsSync(parentDirectory) || !statSync(parentDirectory).isDirectory()) {
-      throw new Error(
+      throw new AppError(
+        503,
+        "DATABASE_NOT_MOUNTED",
         `Database parent directory does not exist: ${parentDirectory}`,
       );
     }
@@ -72,7 +80,11 @@ export function openDatabase(
 
   if (foreignKeys?.foreign_keys !== 1) {
     db.close();
-    throw new Error("SQLite foreign key enforcement could not be enabled");
+    throw new AppError(
+      503,
+      "DATABASE_FOREIGN_KEYS_DISABLED",
+      "SQLite foreign key enforcement could not be enabled",
+    );
   }
 
   return { db, path: databasePath };
