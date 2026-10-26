@@ -3,3 +3,4 @@ terraform.tfstate
 terraform.tfstate.*
 *.tfplan
 crash.log
+cognito.tf.bak
