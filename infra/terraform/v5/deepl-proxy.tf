@@ -74,3 +74,21 @@ resource "aws_cloudfront_distribution" "deepl_proxy" {
 output "deepl_proxy_url" {
   value = "https://${aws_cloudfront_distribution.deepl_proxy.domain_name}"
 }
+
+data "aws_iam_policy_document" "deepl_proxy_token_read" {
+  statement {
+    sid     = "ReadDeepLProxyToken"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+
+    resources = [
+      "arn:aws:ssm:ap-northeast-1:${data.aws_caller_identity.current.account_id}:parameter/gmsv5/deepl/proxy-token"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "deepl_proxy_token_read" {
+  name   = "gmsv5-deepl-proxy-token-read"
+  role   = aws_iam_role.ec2.id
+  policy = data.aws_iam_policy_document.deepl_proxy_token_read.json
+}
