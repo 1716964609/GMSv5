@@ -1,16 +1,16 @@
 # GMS v5 — Production Infrastructure As-Built
 
-**記録日:** 2026-10-25（JST）  
-**対象:** GMS v5 初回本番公開時の稼働構成  
-**Application Release:** `f5fb681`  
+**記録日:** 2026-10-26（JST）
+**対象:** GMS v5 2026年10月26日時点の本番稼働構成
+**Application Release:** `51cba4a`
 **文書種別:** As-Built / Implementation Record  
-**状態:** 本番公開・認証・主要データ操作の実機検証済み
+**状態:** 本番公開・DeepL Egress修正・主要データ操作の実機検証記録
 
 ## 1. Purpose & Scope
 
-本書は、GMS v5の初回本番公開において実際に構築したインフラ、セキュリティ対策、デプロイ方式、データ移行、および検証結果を記録する。
+本書は、GMS v5の初回本番公開と2026年10月26日のDeepL Egress修正において実際に構築したインフラ、セキュリティ対策、デプロイ方式、データ移行、および検証結果を記録する。
 
-本書は既存の`docs/architecture.md`（実装前のArchitecture Draft）を置き換えない。設計当初の想定と、実際に構築されたシステムを区別するための実装記録である。
+本書は`docs/architecture.md`のProduction Architectureと対応する実装記録である。設計当初の想定と、実際に構築されたシステムを区別するため、過去の初回公開記録と今回の更新記録を同じ時系列文書に保持する。
 
 将来の改善計画、未着手タスク、バックログは本書の対象外とする。
 
@@ -144,7 +144,33 @@ CloudFrontでTLSを終端した後、EC2に向けて別のTLS接続を確立す�
 
 これによりCognito Callback、PKCE State、Session Cookie、CSRF Origin検証を処理できる。
 
-### 4.4 Origin Authentication
+### 4.4 DeepL API専用Egress Proxy
+
+2026年10月26日、EC2からDeepL APIへのIPv6接続障害を解決するため、DeepL専用CloudFront Reverse Proxyを追加した。
+
+- Distribution ID: `E3L3D4LI8CKI2M`
+- Domain: `d7xjhnc06nb75.cloudfront.net`
+- Origin: `api-free.deepl.com`
+- EC2 → CloudFront：HTTPS over IPv6
+- CloudFront → DeepL：HTTPS
+- 料金方式：CloudFront従量課金
+- EC2にパブリックIPv4は付与しない。
+- NAT Gateway、DNS64、NAT64は追加していない。
+- DeepL以外のアプリケーショントラフィックはこのDistributionへリダイレクトしない。
+
+CloudFront Functionはruntime 2.0を使用し、CloudFront KeyValueStoreの`shared-token`と`x-gms-proxy-token`を照合する。認証成功後、Functionはプロキシトークンを削除してからDeepLへ転送する。DeepLの`Authorization: DeepL-Auth-Key ...`はユーザー所有のDeepL APIキーであり、プロキシ共有トークンとは別物である。
+
+許可するAPIは次のとおりである。
+
+| Method | Path |
+|---|---|
+| POST | `/v2/translate` |
+| POST | `/v2/glossaries` |
+| DELETE | `/v2/glossaries/{id}` |
+
+キャッシュは無効化し、HTTPSを強制する。上記以外のメソッド・パス、トークンなし、トークン不一致はCloudFront Functionで拒否する。
+
+### 4.5 Origin Authentication
 
 CloudFrontのv5 Originに専用のカスタムヘッダーを設定した。
 
@@ -225,13 +251,13 @@ Nginxはsystemdで`enabled`、`active`となっていることを確認した。
 - Service: `gmsv5.service`
 - Application Bind: `127.0.0.1:3000`
 
-公開時のアプリケーションリリース：
+2026年10月26日時点で有効なアプリケーションリリース：
 
-`/opt/gmsv5/releases/f5fb681`
+`/opt/gmsv5/releases/51cba4a`
 
 systemdのDrop-inによって作業ディレクトリとExecStartを指定している。
 
-実際にリリースされた順にsystemd Drop-inを追加してきたため、設定には複数のリリース指定が存在する。公開時点で有効なリリースは`f5fb681`である。
+実際にリリースされた順にsystemd Drop-inを追加してきたため、設定には複数のリリース指定が存在する。初回公開時の有効リリースは`f5fb681`であり、現在の有効リリースは`51cba4a`である。
 
 ### 6.2 Application Environment
 
@@ -244,6 +270,14 @@ systemdのDrop-inによって作業ディレクトリとExecStartを指定して
 - `COGNITO_REDIRECT_URI=https://sunlightjetrans.com/api/auth/callback`
 - `COGNITO_LOGOUT_URI=https://sunlightjetrans.com/`
 - `GMS_PUBLIC_ORIGIN=https://sunlightjetrans.com`
+
+DeepL Egress修正後のプロバイダー設定：
+
+- `DEEPL_API_URL=https://d7xjhnc06nb75.cloudfront.net/v2/translate`
+- `DEEPL_PROXY_TOKEN`：SSM Parameter Store SecureStringから環境へ供給する秘密値
+- `OPENAI_API_URL`：OpenAIの既存ネイティブIPv6経路を使用
+
+環境変数ファイルは`/etc/gmsv5/gmsv5.env`に置き、所有者・権限は`root:root 600`とする。DeepLプロキシトークンのParameter名は`/gmsv5/deepl/proxy-token`であり、EC2 IAMロールに読み取り権限を付与した。実際のトークン、APIキー、Cognito Secret、暗号鍵は本書に記載しない。
 
 CSRF用の公開Originはsystemd Drop-inから供給している。
 
@@ -291,6 +325,13 @@ EC2への成果物取得には次のIPv6対応エンドポイントを使用し�
 `https://s3.dualstack.ap-northeast-1.amazonaws.com`
 
 **GitHub ActionsのBuildは自動化済みだが、今回の本番デプロイ全体は手動操作を含む。** Git pushだけで本番EC2が自動更新される構成ではない。
+
+2026年10月26日の`51cba4a`リリースでは、初回切り替え時にNext.js起動直後のHTTPヘルスチェックが早すぎたためロールバックを実施した。その後、Readiness Retryを導入して再デプロイに成功した。旧リリースディレクトリと環境変数バックアップは保持した。Readiness RetryとRollbackは今回の手動デプロイ手順であり、恒久的な自動CDの完成を意味しない。
+
+### 6.5 Release History
+
+- 2026-10-25：`f5fb681` 初回本番公開
+- 2026-10-26：`51cba4a` DeepL Egress Connectivity Fix
 
 ## 7. Authentication & Application Security
 
@@ -441,6 +482,47 @@ CloudFront専用テストEndpoint：
 
 これらは実行済みの検証結果であり、全業務ユースケースの本番E2E検証完了を意味するものではない。
 
+### 9.5 2026-10-26 — DeepL Egress Connectivity Fix
+
+#### 発見した問題
+
+- EC2にパブリックIPv4が存在しなかった。
+- DeepL APIエンドポイントではIPv4アドレスが返された。
+- `curl -6`によるDeepL接続に失敗した。
+- `curl -4`は接続タイムアウトした。
+- サブネットのDNS64は無効だった。
+- NAT Gatewayは存在しなかった。
+- EC2からOpenAI APIへのネイティブIPv6通信は可能だった。
+
+#### 採用した解決方式
+
+DeepL専用CloudFront Reverse Proxyを導入し、EC2のIPv6-first設計を維持した。DeepL APIのユーザーキーは`Authorization`でDeepLへ渡し、プロキシ共有トークンはCloudFront Functionで検証・削除する。
+
+#### Terraform / IAM
+
+- CloudFront Distribution
+- CloudFront Function
+- CloudFront KeyValueStore
+- EC2 IAM Role Policy
+- Cognitoの既存本番Callback/Logout URLのTerraform取り込み
+
+#### 検証実績
+
+- Terraform validate成功
+- CloudFrontデプロイ成功
+- 認証トークンなしでCloudFront Functionが403を返した
+- 正しいプロキシトークンと無効なDeepLキーで、DeepL由来の認証エラーを確認した
+- EC2からCloudFrontへのIPv6接続に成功した
+- SSM SecureStringの認証済み読み取りに成功した
+- GitHub Actions ARM64ビルドに成功した
+- SHA-256チェックサム検証に成功した
+- 新リリースをS3 Dualstack経由でEC2へ配置した
+- `gmsv5.service`が新リリースでactiveになった
+- ローカルHTTPヘルスチェックが200になった
+- 本番Web画面で用語1件を選択した日本語→英語翻訳に成功した
+
+上記は2026年10月26日のDeepL Egress修正に関する実績である。大量用語の一括ロード、用語なし翻訳、最大10,000件選択、一時用語集削除完了など、別の未検証動作を成功済みとは扱わない。
+
 ## 10. Production Cutover & Recovery Assets
 
 ### 10.1 Cutover Method
@@ -480,6 +562,9 @@ EC2側ではCognito環境変数とCSRF systemd Drop-inの切り替え前バッ�
 | Cache Disabled | ユーザー固有の動的データをCDNにキャッシュしない |
 | Versioned Release Directories | リリースの識別と切り戻しを容易にする |
 | Staged Origin Cutover | 旧v3.1を維持したままv5接続を検証する |
+| Dedicated DeepL CloudFront Proxy | IPv4到達性のないEC2からDeepLへIPv6-firstで接続する |
+| CloudFront Function + KeyValueStore | DeepL専用経路の共有トークン認証とAPI許可リストを実施する |
+| Native IPv6 OpenAI Egress | OpenAIは既存の直接IPv6経路を維持する |
 
 ## 12. Record Boundaries
 
@@ -493,6 +578,7 @@ EC2側ではCognito環境変数とCSRF systemd Drop-inの切り替え前バッ�
 
 ---
 
-**Recorded Production Application Release:** `f5fb681`  
+**Recorded Production Application Release:** `51cba4a`
 **Public Endpoint:** `https://sunlightjetrans.com`  
-**Documentation Baseline:** 2026-10-25 JST
+**Previous Initial Release:** `f5fb681`（2026-10-25 JST）
+**Documentation Baseline:** 2026-10-26 JST
