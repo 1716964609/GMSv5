@@ -44,13 +44,13 @@ resource "aws_cognito_user_pool_client" "v5" {
 
   supported_identity_providers = ["COGNITO"]
 
-  callback_urls = [
+  callback_urls = distinct(concat([
     "http://localhost:3100/api/auth/callback"
-  ]
+  ], ["https://sunlightjetrans.com/api/auth/callback"]))
 
-  logout_urls = [
+  logout_urls = distinct(concat([
     "http://localhost:3100/"
-  ]
+  ], ["https://sunlightjetrans.com/"]))
 
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",

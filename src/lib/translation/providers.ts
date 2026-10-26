@@ -32,6 +32,50 @@ function deepLBaseUrl(): string {
   );
 }
 
+
+function deepLHeaders(
+  apiKey: string,
+  contentType?: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `DeepL-Auth-Key ${apiKey}`,
+  };
+
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  }
+
+  const endpoint = new URL(
+    process.env.DEEPL_API_URL ??
+      "https://api-free.deepl.com/v2/translate",
+  );
+
+  if (endpoint.hostname === "d7xjhnc06nb75.cloudfront.net") {
+    if (
+      endpoint.protocol !== "https:" ||
+      endpoint.pathname !== "/v2/translate"
+    ) {
+      throw new ProviderError(
+        "DEEPL",
+        "Invalid DeepL proxy endpoint",
+      );
+    }
+
+    const token = process.env.DEEPL_PROXY_TOKEN?.trim();
+
+    if (!token) {
+      throw new ProviderError(
+        "DEEPL",
+        "DeepL proxy token is not configured",
+      );
+    }
+
+    headers["x-gms-proxy-token"] = token;
+  }
+
+  return headers;
+}
+
 async function responseJson(response: Response): Promise<Record<string, unknown>> {
   try {
     return (await response.json()) as Record<string, unknown>;
@@ -47,10 +91,7 @@ export const deepLProvider: TranslationProvider = {
       if (input.terms.length > 0) {
         const glossaryResponse = await fetch(`${deepLBaseUrl()}/glossaries`, {
           method: "POST",
-          headers: {
-            Authorization: `DeepL-Auth-Key ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: deepLHeaders(apiKey, "application/json"),
           body: JSON.stringify({
             name: `gms-${randomUUID()}`,
             source_lang: input.sourceLanguage,
@@ -82,10 +123,10 @@ export const deepLProvider: TranslationProvider = {
       }
       const response = await fetch(process.env.DEEPL_API_URL ?? "https://api-free.deepl.com/v2/translate", {
         method: "POST",
-        headers: {
-          Authorization: `DeepL-Auth-Key ${apiKey}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
+        headers: deepLHeaders(
+          apiKey,
+          "application/x-www-form-urlencoded",
+        ),
         body,
         cache: "no-store",
       });
@@ -111,7 +152,7 @@ export const deepLProvider: TranslationProvider = {
       if (glossaryId) {
         await fetch(`${deepLBaseUrl()}/glossaries/${encodeURIComponent(glossaryId)}`, {
           method: "DELETE",
-          headers: { Authorization: `DeepL-Auth-Key ${apiKey}` },
+          headers: deepLHeaders(apiKey),
           cache: "no-store",
         }).catch(() => undefined);
       }
