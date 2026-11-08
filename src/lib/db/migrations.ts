@@ -97,6 +97,43 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    name: "glossary_term_revisions",
+    up(db) {
+      db.exec(`
+        CREATE TABLE glossary_term_revisions (
+          glossary_id TEXT PRIMARY KEY REFERENCES glossaries(glossary_id) ON DELETE CASCADE,
+          epoch TEXT NOT NULL,
+          revision INTEGER NOT NULL DEFAULT 0
+            CHECK (typeof(revision) = 'integer' AND revision >= 0)
+        );
+        INSERT INTO glossary_term_revisions (glossary_id, epoch, revision)
+          SELECT glossary_id, lower(hex(randomblob(16))), 0 FROM glossaries;
+
+        CREATE TRIGGER glossary_revision_created AFTER INSERT ON glossaries BEGIN
+          INSERT INTO glossary_term_revisions (glossary_id, epoch, revision)
+            VALUES (NEW.glossary_id, lower(hex(randomblob(16))), 0);
+        END;
+        CREATE TRIGGER glossary_revision_updated AFTER UPDATE ON glossaries BEGIN
+          UPDATE glossary_term_revisions SET revision = revision + 1
+            WHERE glossary_id = NEW.glossary_id;
+        END;
+        CREATE TRIGGER term_revision_inserted AFTER INSERT ON terms BEGIN
+          UPDATE glossary_term_revisions SET revision = revision + 1
+            WHERE glossary_id = NEW.glossary_id;
+        END;
+        CREATE TRIGGER term_revision_updated AFTER UPDATE ON terms BEGIN
+          UPDATE glossary_term_revisions SET revision = revision + 1
+            WHERE glossary_id IN (OLD.glossary_id, NEW.glossary_id);
+        END;
+        CREATE TRIGGER term_revision_deleted AFTER DELETE ON terms BEGIN
+          UPDATE glossary_term_revisions SET revision = revision + 1
+            WHERE glossary_id = OLD.glossary_id;
+        END;
+      `);
+    },
+  },
 ];
 
 function validateMigrations(migrationSet: readonly Migration[]): void {

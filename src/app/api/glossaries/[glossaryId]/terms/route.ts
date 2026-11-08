@@ -1,17 +1,17 @@
 import { createTermUseCase } from "@/lib/services/glossary";
-import { listTerms } from "@/lib/db/repository";
+import { readTermPageRequest } from "@/lib/services/term-pages";
 import { json, readJson } from "@/lib/http";
-import { positivePage } from "@/lib/validation";
 import { protectedRequest } from "../../../_utils";
 
 type Context = { params: Promise<{ glossaryId: string }> };
 
 export async function GET(request: Request, context: Context): Promise<Response> {
-  return protectedRequest(request, async (db, user) => {
+  const response = await protectedRequest(request, async (db, user) => {
     const { glossaryId } = await context.params;
-    const page = positivePage(new URL(request.url).searchParams.get("page"));
-    return json(listTerms(db, user.userId, glossaryId, page));
+    return json(readTermPageRequest(db, user.userId, glossaryId, new URL(request.url)));
   });
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
 }
 
 export async function POST(request: Request, context: Context): Promise<Response> {

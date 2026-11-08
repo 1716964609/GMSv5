@@ -91,10 +91,11 @@ describe("SQLite database migration", () => {
       .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
       .get<{ count: number }>();
 
-    assert.equal(migrationCount?.count, 1);
+    assert.equal(migrationCount?.count, 2);
     assert.deepEqual(secondRun.applied, []);
     assert.deepEqual(secondRun.skipped, [
       { version: 1, name: "initial_schema" },
+      { version: 2, name: "glossary_term_revisions" },
     ]);
   });
 
@@ -132,6 +133,7 @@ describe("SQLite database migration", () => {
     assert.equal(migrationCount?.count, 0);
     assert.deepEqual(runMigrations(handle.db).applied, [
       { version: 1, name: "initial_schema" },
+      { version: 2, name: "glossary_term_revisions" },
     ]);
   });
 
@@ -222,6 +224,7 @@ describe("SQLite database migration", () => {
     assert.deepEqual(tables, [
       "api_credentials",
       "glossaries",
+      "glossary_term_revisions",
       "schema_migrations",
       "terms",
       "users",

@@ -53,6 +53,7 @@ export type TermPage = {
   pageSize: number;
   total: number;
   hasNextPage: boolean;
+  termSetVersion?: string;
 };
 
 export type CredentialSummary = {

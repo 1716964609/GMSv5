@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Glossary, Term, TermPage, TranslationConflict } from "@/lib/domain/types";
 import { AppShell } from "../app-shell";
-import { fetchAllPages } from "@/lib/translation/term-page-loader";
+import { executeSelectAll } from "@/lib/translation/bulk-term-selection";
+import { getTabTermScheduler, termFetchConcurrency } from "@/lib/translation/term-fetch-scheduler";
 import { isAbortError, TermRequestCoordinator } from "@/lib/translation/term-requests";
 import {
   collectCompletePages,
   toggleGlossaryExpansion,
-  toggleGlossarySelection,
   toggleTermSelection,
 } from "@/lib/translation/term-selection";
 
@@ -73,7 +73,10 @@ export default function TranslationPage() {
   }
 
   function commitTermPages(glossaryId: string, pages: Record<number, TermPage>) {
-    const next = { ...termPagesRef.current, [glossaryId]: { ...termPagesRef.current[glossaryId], ...pages } };
+    const version = Object.values(pages)[0]?.termSetVersion;
+    const compatible = Object.fromEntries(Object.entries(termPagesRef.current[glossaryId] ?? {})
+      .filter(([, page]) => version !== undefined && page.termSetVersion === version));
+    const next = { ...termPagesRef.current, [glossaryId]: { ...compatible, ...pages } };
     termPagesRef.current = next;
     setTermPages(next);
   }
@@ -131,7 +134,7 @@ export default function TranslationPage() {
     setGlossaryLoadState(glossaryId, { kind: "page", page });
     setTermErrors((current) => ({ ...current, [glossaryId]: undefined }));
     try {
-      const result = await api<TermPage>(`/api/glossaries/${encodeURIComponent(glossaryId)}/terms?page=${page}`, { signal: token.signal });
+      const result = await getTabTermScheduler().run(token.signal, () => api<TermPage>(`/api/glossaries/${encodeURIComponent(glossaryId)}/terms?page=${page}`, { signal: token.signal, cache: "no-store" }));
       if (!requests.current.isCurrent(token) || !expandedRef.current.has(glossaryId)) return;
       commitTermPages(glossaryId, { [page]: result });
       setCurrentPages((current) => ({ ...current, [glossaryId]: page }));
@@ -185,41 +188,48 @@ export default function TranslationPage() {
   }
 
   async function selectAll(glossaryId: string) {
-    if (loadStates[glossaryId]?.kind === "select-all") return;
+    if (loadStates[glossaryId]?.kind === "select-all" || !expandedRef.current.has(glossaryId)) return;
     const cachedPages = pageMap(termPagesRef.current[glossaryId]);
-    const cachedTerms = collectCompletePages(cachedPages);
-    if (cachedTerms) {
-      const result = toggleGlossarySelection(selectedRef.current, cachedTerms.map((term) => term.termId));
-      if (result.status === "limit-exceeded") {
-        setSelectionError("この用語集をすべて選択すると、10,000件の上限を超えます。既存の選択は変更していません。");
-      } else {
-        setSelectionError("");
-        commitSelected(result.selectedIds);
-      }
-      return;
-    }
-
     const token = requests.current.begin(glossaryId);
+    const url = `/api/glossaries/${encodeURIComponent(glossaryId)}/terms`;
+    const isCurrent = () => requests.current.isCurrent(token) && expandedRef.current.has(glossaryId);
     setGlossaryLoadState(glossaryId, { kind: "select-all" });
+    setSelectionError("");
     setTermErrors((current) => ({ ...current, [glossaryId]: undefined }));
     try {
-      const pages = await fetchAllPages<Term, TermPage>(
-        async (page, signal) => api<TermPage>(`/api/glossaries/${encodeURIComponent(glossaryId)}/terms?page=${page}`, { signal }),
+      const result = await executeSelectAll<TermPage>(
+        (page, signal, version) => {
+          const query = new URLSearchParams({ page: String(page) });
+          if (version !== undefined) query.set("expectedVersion", version);
+          return api<TermPage>(`${url}?${query}`, { signal, cache: "no-store" });
+        },
         token.signal,
-        cachedPages,
+        {
+          scheduler: getTabTermScheduler(),
+          concurrency: termFetchConcurrency(process.env.NEXT_PUBLIC_GMS_TERM_FETCH_CONCURRENCY),
+          cachedPages,
+          validateVersion: (version, signal) => api<{ termSetVersion: string }>(
+            `${url}?${new URLSearchParams({ validateOnly: "true", expectedVersion: version })}`,
+            { signal, cache: "no-store" },
+          ),
+          isCurrent,
+          getSelected: () => selectedRef.current,
+          commit: commitSelected,
+        },
       );
-      if (!requests.current.isCurrent(token) || !expandedRef.current.has(glossaryId)) return;
-      const allTerms = pages.flatMap((page) => page.items);
-      const result = toggleGlossarySelection(selectedRef.current, allTerms.map((term) => term.termId));
-      if (result.status === "limit-exceeded") {
+      if (result.status === "stale" || !isCurrent()) return;
+      if (result.selectionStatus === "limit-exceeded") {
         setSelectionError("この用語集をすべて選択すると、10,000件の上限を超えます。既存の選択は変更していません。");
-      } else {
-        setSelectionError("");
-        commitSelected(result.selectedIds);
       }
-      commitTermPages(glossaryId, Object.fromEntries(pages.map((page) => [page.page, page])));
+      commitTermPages(glossaryId, Object.fromEntries(result.pages.map((page) => [page.page, page])));
     } catch (reason) {
       if (!requests.current.isCurrent(token) || isAbortError(reason)) return;
+      // A failed operation must not leave an old complete collection labelled current.
+      const next = { ...termPagesRef.current };
+      delete next[glossaryId];
+      termPagesRef.current = next;
+      setTermPages(next);
+      setCurrentPages((current) => ({ ...current, [glossaryId]: 1 }));
       setTermErrors((current) => ({ ...current, [glossaryId]: reason instanceof Error ? reason.message : "用語を読み込めませんでした" }));
     } finally {
       if (requests.current.isCurrent(token)) {
