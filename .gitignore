@@ -17,3 +17,6 @@ dist/
 
 /dist-arm64/
 next-env.d.ts
+
+# Local runtime and test data
+.data/
