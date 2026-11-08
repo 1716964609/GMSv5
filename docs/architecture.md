@@ -1,15 +1,15 @@
 # GMS v5 — Production Architecture
 
-**基準日:** 2026-10-26（JST）
+**基準日:** 2026-11-08（JST）
 **状態:** Production Architecture / Implementation Baseline
-**対象リリース:** `51cba4a`
+**対象リリース:** `9783463dcdd3f3b10f743ab3e1488978b842b4be`
 **公開URL:** `https://sunlightjetrans.com`
 
 ## 1. 文書の位置付け
 
-本書は、2026年10月26日時点で稼働しているGMS v5のProduction Architectureを記録する。実装前のArchitecture Draftではなく、検証済みのTerraform、アプリケーション実装、デプロイ記録を優先する。
+本書は2026年11月8日のリリースコードと提示された本番実績を反映する。ネットワーク・AWS構成は10月26日の記録を継承し、今回ライブ環境で再監査していない。本番Migration適用ログとsystemd最終状態は未提示で要確認。
 
-GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻訳とOpenAIによるポストエディティングを行う、単一EC2上のModular Monolithである。今回の基準更新では、DeepLのIPv4接続障害を解決する専用CloudFront Reverse Proxyを追加した。
+GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻訳とOpenAIによるポストエディティングを行う、単一EC2上のModular Monolithである。DeepL専用CloudFront Reverse Proxyは既存構成として維持する。今回の変更は紫系公開LPと改訂番号付き制限並列取得である。
 
 機能要件、エンティティ、ユースケースは次の文書をSource of Truthとする。
 
@@ -17,7 +17,8 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 - [Entity Model](entity-model.md)
 - [Use Cases](use-cases.md)
 - [Use Case Diagram](use-case-diagram.puml)
-- [Production As-Built](infrastructure/production-as-built-2026-10-26.md)
+- [Production As-Built 2026-11-08](infrastructure/production-as-built-2026-11-08.md)
+- [Historical As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)
 
 ## 2. Architecture Principles
 
@@ -63,7 +64,7 @@ flowchart LR
     DNS --> CF[Existing CloudFront\nE1EF0DWDYA2XH8]
     CF -->|HTTPS / IPv6| ORIGIN[origin-v5.sunlightjetrans.com]
     ORIGIN -->|TCP 443| NGINX[EC2 Nginx\nLet's Encrypt]
-    NGINX -->|127.0.0.1:3000| NEXT[Next.js / Node.js\n51cba4a]
+    NGINX -->|127.0.0.1:3000| NEXT[Next.js / Node.js\n9783463]
     NEXT --> DB[SQLite]
     DB --> EBS[独立暗号化EBS\n/mnt/gms-data/gmsv5.sqlite]
 ```
@@ -183,6 +184,16 @@ Amazon Cognito LiteのClassic Hosted UIを使用する。
 
 アカウント、Glossary、Term、API認証情報はユーザー所有範囲に限定する。PENDING_DELETIONアカウントは通常利用を停止し、30暦日後に内部処理で恒久削除する。
 
+### 8.1 Baseline 1.2のLP・Term取得構成
+
+公開LPはHTML/CSS/SVGの紫系グラデーションとコンセプトパネルを採用し、既存登録・ログイン導線を維持する。Glossary/Term管理の5パネル構成は変更しない。
+
+BYO初期表示はGlossary一覧、展開は最初のTermページ、以後は閲覧時に追加取得する。Select Allは版を新規確定したページから開始し、同版の取得済みページのみ再利用する。ワーカープールは暫定デフォルト2、設定1/2/4、単一操作と同一タブの上限は各4。通常ページ・最終版確認も共有スケジューラを通す。公開設定はビルド時に確定し、本番実効同時数のNetwork証跡は未提示。
+
+既存Term GETに`termSetVersion`、`expectedVersion`、`validateOnly`を追加する。所有権・版・COUNT・本文を同一読取トランザクションで揃え、版不一致は409 `TERM_SET_CHANGED`。全ページをページ番号で結合・検証し、最終版確認後に最新選択IDとの和集合を判定し、10,000件以内だけ原子的に反映する。変更・失敗・Abort・古い世代では当該操作の選択変更0件。GETはprivate/no-store。
+
+厳密snapshotではなく、最終確認後の変更は後続翻訳で再検証する。詳細は[CR-01技術設計](design/cr-01-parallel-fetch-design.md)を参照する。
+
 ## 9. Persistence and Process Management
 
 - Production Database：`/mnt/gms-data/gmsv5.sqlite`
@@ -191,6 +202,8 @@ Amazon Cognito LiteのClassic Hosted UIを使用する。
 - `gmsv5.service`がNext.js Standaloneを`127.0.0.1:3000`で起動する。
 - Nginxが443番でTLSを終端し、Next.jsへLoopback接続する。
 - 旧リリースディレクトリと環境変数バックアップを保持し、手動切り戻し可能な構成とする。
+
+migration v2は`glossary_term_revisions`（Glossary単位epoch/revision）を追加し、既存Glossaryをbackfillする。Glossary作成/更新、Term作成/更新/削除の5トリガーで本文更新と改訂を同じ書込トランザクションに含め、JSON importにも適用する。移動は旧/新Glossaryを更新する。応答版はサーバー起動世代・epoch・revisionから成る。DB復元は停止・再起動を前提とする。隔離DB v1→v2成功と本番適用結果を区別し、本番移行ログは要確認。
 
 ## 10. CI / Build / Deployment
 
@@ -210,7 +223,9 @@ flowchart LR
 
 Build成果物はARM64用tar.gzとSHA-256ファイルである。デプロイでは、成果物をS3へ配置し、EC2がS3 Dualstack Endpointから取得してチェックサムを再検証する。その後、リリースディレクトリを切り替え、systemdを再起動してHTTPヘルスチェックを行う。
 
-2026-10-26の切り替えでは、起動直後のReadinessが早すぎたため一度ロールバックし、その後Readiness Retryを導入して再デプロイに成功した。これは今回の手動デプロイ手順の改善であり、完全自動CDの完成を意味しない。
+2026-10-26の切り替えでは、起動直後のReadinessが早すぎたため一度ロールバックし、その後Readiness Retryを導入して再デプロイに成功した。これは当時の手動デプロイ手順の改善であり、完全自動CDの完成を意味しない。
+
+2026年11月8日の[Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676)はbuild job成功、artifact head SHAは現行releaseと一致。SHA256 Verified、S3→SSM→systemdの配布はリリース報告による。切替/readinessログ・systemd最終状態は要確認。workflowには単体/結合テストの実行ステップがなく、開発83件の結果と区別する。バックアップ・隔離DB・ロールバック資産の確認状態は[現行As-Built](infrastructure/production-as-built-2026-11-08.md)に記録する。
 
 ## 11. TLS and Periodic Operations
 
@@ -230,11 +245,12 @@ Build成果物はARM64用tar.gzとSHA-256ファイルである。デプロイで
 - Prometheus/Grafanaの本番監視基盤
 - Git pushだけで本番更新する完全自動CD
 - Spot停止時の自動インスタンス補充・ENI/EBS再接続
-- 大量用語の一括ロード問題の解決
-- 用語なし翻訳、最大10,000件選択、一時用語集削除完了など、今回のDeepL Egress修正で実行していない動作の本番成功
+- 正式な1/2/4性能比較とp95≤20秒・逐次比50%以上短縮の達成
+- 網羅的E2E、今回の用語なし翻訳・一時用語集削除完了の本番再検証
+- 実行ログによる本番Migration完了・systemd最終状態・切戻し資産の確認
 
-これらは別途検証・設計・実装が必要な事項であり、今回のDocumentation Baseline Refreshの対象外とする。
+Product Ownerは新LPと10,000件選択成功を本番ブラウザで確認した。約40秒→約27秒（参考約32.5%短縮）は正式p95比較ではなく、暫定性能目標の達成は未確認・受入未完了。上記項目は追加検証を要する。
 
 ## 13. Related Record
 
-本番構築・検証の時系列記録は[Production As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)に記載する。過去の初回公開リリース`f5fb681`と、その時点の検証結果は履歴として同文書に保持する。
+現行releaseの証跡と未確認事項は[Production As-Built 2026-11-08](infrastructure/production-as-built-2026-11-08.md)を参照する。過去の本番構築・検証の時系列記録は[Production As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)に記載する。過去の初回公開リリース`f5fb681`と、その時点の検証結果は履歴として同文書に保持する。

@@ -1,6 +1,6 @@
 # CR-01 — 改訂番号による変更検出と制限付き並列取得
 
-**状態：Product Owner実装指示に基づくローカル実装・開発検証。性能受入とリリース承認は別工程。**
+**状態：CR-01本番反映済み。正式な性能受入は未完了。本番Migration適用ログ・systemd最終状態は要確認。**
 
 CR-02の確定点は`de30d5aafbd10e2b06583b8365782e4d00f71b01`。本変更でCR-02の実装ファイルは変更しない。CR-01は今回の指示によりV方式（変更検出・操作全体の失敗）へ確定し、厳密な開始時点snapshotは必須としない。
 
@@ -15,7 +15,7 @@ CR-02の確定点は`de30d5aafbd10e2b06583b8365782e4d00f71b01`。本変更でCR-
 
 基準コミットの`fetchAllPages()`は逐次await、APIは100件単位のLIMIT/OFFSETだった。Glossaryのupdated_atはTerm CRUD時に更新されず、改訂識別子として流用できない。APIの各要求でDB接続を開閉し、COUNTとSELECTも明示的な読取トランザクションで揃っていなかった。
 
-ローカル約97ページが高速、本番10,000件規模で約40秒という値はProduct Owner観測であり、今回独立測定はしていない。100件/ページなら10,000件は100ページ、最初の1ページだけがキャッシュ済みなら残り99要求となる。97ページという観測のキャッシュ/データ条件は未確定である。
+ローカル約97ページが高速、旧版旧版本番10,000件規模で約40秒という値はProduct Owner観測であり、今回独立測定はしていない。100件/ページなら10,000件は100ページ、最初の1ページだけがキャッシュ済みなら残り99要求となる。97ページという観測のキャッシュ/データ条件は未確定である。
 
 ## 2. 保証する時点と限界
 
@@ -114,7 +114,9 @@ p95≤20秒・同条件の逐次比50%以上短縮は暫定目標。未測定で
 6. 小型EC2相当の隔離環境でCPU/RSS、DB busy/lock、I/O、CPU credit、他の軽量APIのp95を記録する。負荷ガード案は他API p95が逐次基準2倍以内。長い読取のWAL/checkpointへの影響も確認する。journal modeは今回変更していない。[SQLite WAL](https://www.sqlite.org/wal.html)を参照。
 7. 目標未達や負荷増加なら同時数2/1への変更を検討し、無制限並列化しない。別タブ/複数workerの総サーバー負荷制限が必要なら別設計へ戻す。
 
-## 9. Platform向け手動E2E手順（未実施）
+## 9. Platform向け手動E2E手順（網羅的検証は未完了）
+
+Product Ownerによる本番新LP表示・10,000 Term選択成功の限定的確認は実施済み。以下の全ケースや正式性能比較の完了を意味しない。
 
 - 専用の隔離SQLiteを新規作成し、次に合成データのv1 DBコピーもv2へ移行する。既存ユーザー/Glossary/Termとrevision backfillを確認する。本番DBを使用しない。
 - APIの通常ページと最終確認の版・private/no-storeヘッダーを確認し、未ログイン時の拒否・別所有者の拒否を両モードで確認する。
@@ -125,16 +127,16 @@ p95≤20秒・同条件の逐次比50%以上短縮は暫定目標。未測定で
 - 別Glossaryの成功操作と失敗操作を重ね、成功した選択を失わないことを確認する。用語なし翻訳の導線と、既存認証/所有権制御も別途確認する。
 - 実サービス翻訳、Production Build、AWS操作、Production相当性能測定、DeployはPlatformの承認工程で実施する。今回の開発チームは実施しない。
 
-## 10. 開発検証記録
+## 10. 開発検証記録（9783463実装時点・今回再実行なし）
 
 - `node --experimental-strip-types --test test/*.test.ts`：83件成功、失敗0件。新取得/選択/改訂関連34件（loader 12、bulk selection 6、revision integration 16）を含む。
 - `npm run typecheck`：成功。`next typegen`と`tsc --noEmit`のみでProduction Buildは実行していない。
 - `npm run lint`：エラー0件。未変更の`infra/terraform/v5/deepl-proxy-auth.js`に既存警告2件。
 - データは合成データ・OS一時ディレクトリのSQLite・ローカルHTTPモックのみ。v1→v2移行の既存行保持と、2接続の制御した競合を検証した。既存ローカルDB/本番SQLiteへエージェントが移行を適用していない。
 - CR-02ソース/CSS/LPテスト/デモ素材は`de30d5a`から差分なし。HTTPルート全体/Cognito往復を含むブラウザE2E、1/2/4の性能比較、本番目標達成、Build/Deployは未実施。
-- 変更はローカル作業ツリーに保持し、Commit/Pushしない。Platform Teamの9章の確認と8章の測定へ引き渡す。
+- 当時の開発完了時点ではCommit/PushせずPlatformへ引き渡した。その後の実装確定コミットは`9783463`。本番反映状況は12章、残る確認は9章・測定は8章を参照する。
 
-## 11. 変更ファイル一覧
+## 11. 実装コミット9783463の変更ファイル一覧
 
 | 区分 | ファイル |
 |---|---|
@@ -144,3 +146,9 @@ p95≤20秒・同条件の逐次比50%以上短縮は暫定目標。未測定で
 | DB/サービス/型 | `src/lib/db/migrations.ts`、`src/lib/db/term-pages.ts`、`src/lib/services/term-pages.ts`、`src/lib/domain/types.ts` |
 | テスト | `test/term-page-loader.test.ts`、`test/term-revision.test.ts`、`test/bulk-term-selection.test.ts`、`test/db-migration.test.ts` |
 | 文書 | `docs/requirements.md`、`docs/use-cases.md`、`docs/design/baseline-1.2-proposal.md`、`docs/design/cr-01-parallel-fetch-design.md` |
+
+## 12. 本番反映・検証状態（2026年11月8日）
+
+2026年11月8日にCR-01・CR-02を本番反映（release `9783463dcdd3f3b10f743ab3e1488978b842b4be`）。Product Ownerは新LP表示と10,000 Term選択成功を本番ブラウザで確認した。旧版約40秒→新版約27秒（参考短縮率約32.5%）は同条件の正式なp95比較ではない。FR-734のp95≤20秒・逐次比50%以上短縮は達成済みとせず、正式な性能受入は未完了。本番Migration適用結果・systemd最終状態の実行ログは未提示で要確認。
+
+[Production As-Built](../infrastructure/production-as-built-2026-11-08.md)にActions Run `42481781676`、バックアップ・隔離DB移行・未確認事項を集約する。暫定デフォルト2、単一操作/同一タブ最大4の実装を維持する。隔離DBの件数とPASSを本番移行後の実測値として扱わない。過去の開発記録のBuild/Deploy未実施は当時の開発担当の範囲を指し、今回報告されたCI/Platformの本番リリースとは区別する。

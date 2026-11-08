@@ -2,12 +2,14 @@
 
 GMS v5 is a multilingual glossary management and AI-assisted translation web application. Users manage their own terminology, select terms for a translation request, and use a two-stage DeepL → OpenAI translation flow with their own API keys.
 
-This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The production documentation baseline below reflects the verified production configuration as of 2026-10-26 JST.
+This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The production documentation baseline below records the 2026-11-08 JST release, distinguishing release reports, code/CI evidence, and unverified runtime evidence. Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
 
 ## Production Status
 
 - Public URL: <https://sunlightjetrans.com>
-- Current application release: `51cba4a`
+- Current application release: `9783463dcdd3f3b10f743ab3e1488978b842b4be` (2026-11-08)
+- Previous release: `5f0c6e7`; Lavender LP commit: `de30d5a`
+- [Build ARM64 Release #10 / Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676): Success; artifact SHA256 verified per release report
 - Initial production release: `f5fb681` on 2026-10-25
 - Runtime: Amazon Linux 2023 / ARM64 / Node.js 26 / Next.js Standalone
 - Process: `gmsv5.service`
@@ -15,8 +17,12 @@ This repository follows Spec-Driven Development and Simon Martinelli's AI Unifie
 
 The DeepL IPv4 reachability issue was addressed in release `51cba4a` by adding a dedicated CloudFront Reverse Proxy. OpenAI continues to use the EC2 native IPv6 path.
 
+The Product Owner confirmed the new Lavender LP and successful selection of 10,000 Terms in production. Select All was observed at approximately 27 seconds versus 40 seconds previously (about 32.5% reduction). This is not a controlled p95 comparison; the provisional ≤20-second / ≥50% improvement targets are not met by these observations and formal performance acceptance remains pending. Production migration completion logs and the final systemd state remain unverified. See the [current As-Built](docs/infrastructure/production-as-built-2026-11-08.md).
+
 ## Core Features
 
+- Purple/Lavender public landing page with existing registration and login entry points
+- Lazy Term pages and revision-aware bounded parallel Select All (default 2, operation/tab maximum 4), with atomic selection and a 10,000 unique Term ID limit
 - Cognito-based registration, email verification, login, logout, and password recovery
 - User-owned Glossary and Term CRUD
 - Strict JSON glossary import with transactional All-or-Nothing behavior
@@ -163,7 +169,8 @@ Do not call paid external APIs from local tests unless explicitly intended. The 
 | [Use Cases](docs/use-cases.md) | System behavior and acceptance criteria |
 | [Use Case Diagram](docs/use-case-diagram.puml) | PlantUML use case model |
 | [Production Architecture](docs/architecture.md) | Current production architecture |
-| [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | Current production implementation record |
+| [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | Current release, evidence and outstanding verification |
+| [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | Historical production record |
 
 ## Explicit Boundaries
 
@@ -172,7 +179,8 @@ The following are not represented as implemented production capabilities:
 - Prometheus/Grafana production monitoring
 - Fully automatic CD from Git push to EC2
 - Automatic Spot replacement and ENI/EBS recovery
-- Resolution of the large-glossary bulk loading problem
-- Unverified behavior such as zero-term translation, selecting 10,000 terms, or confirmed temporary glossary cleanup
+- Formal 1/2/4 concurrency performance comparison and achievement of the provisional p95 targets
+- Comprehensive production E2E, zero-term translation and confirmed temporary glossary cleanup for this release
+- Execution-log verification of production migration completion, final systemd state and rollback asset availability
 
-The product specifications in `docs/vision.md`, `docs/requirements.md`, `docs/entity-model.md`, `docs/use-cases.md`, and `docs/use-case-diagram.puml` remain unchanged by this documentation refresh.
+This documentation refresh records release status without changing functional acceptance criteria. Baseline 1.1 approval/release history and the October As-Built are preserved. No AWS, database, build or deployment operations were performed during the refresh.

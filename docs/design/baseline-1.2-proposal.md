@@ -1,20 +1,24 @@
-# GMS v5 — Baseline 1.2 仕様・デザイン改訂提案
+# GMS v5 — Baseline 1.2 仕様・デザイン記録
 
-**文書バージョン：** Baseline 1.2 改訂案  
-**文書状態：** Baseline 1.2 改訂案（CR-02関連仕様は2026年11月8日Product Owner承認済み・ローカル実装済み。CR-01は改訂番号方式による実装指示済み・性能未検証。Baseline 1.2全体のリリース承認は未実施）  
-**対象変更要求：** CR-01 Bulk Term Selection Performance、CR-02 Public Landing Page Modernization  
-**前版履歴：** Baseline 1.1は2026年11月8日に承認され、本番リリース済み。CR-02の承認範囲を除くBaseline 1.1は引き続き有効。  
+**文書バージョン：** Baseline 1.2
+
+**文書状態：** CR-01・CR-02本番反映済み。性能受入未完了・運用証跡は一部要確認。
+
+**対象変更要求：** CR-01 Bulk Term Selection Performance、CR-02 Public Landing Page Modernization
+
+**前版履歴：** Baseline 1.1は2026年11月8日に承認され、本番リリース済み。CR-01・CR-02以外のBaseline 1.1は引き続き有効。
+
 **仕様書：** [requirements.md](../requirements.md)、[use-cases.md](../use-cases.md)
 
 ---
 
 ## 1. 提案の位置づけと対象
 
-本書はCR-02の確定記録と、CR-01の改訂番号方式による実装方針を記録する。CR-02は本書の承認範囲に基づくローカル実装を完了した。CR-01は今回の実装指示に基づき開発工程へ進む。Baseline 1.2全体のリリース承認は未実施であり、Baseline 1.1はCR-02以外の既存範囲で有効なベースラインである。
+本書はCR-02の確定デザインとCR-01の改訂番号方式を記録する。両変更は2026年11月8日に本番リリース済み。Baseline 1.1のその他の要件と承認・リリース履歴を維持する。性能受入の完了は本番反映とは区別する。
 
 CR-02の対象は未認証ユーザー向け公開ランディングページだけとする。Glossary Managementの5パネル構成、BYO Translation、設定、認証後ナビゲーション、既存の登録・ログイン処理は変更対象に含めない。CR-01はBYO TranslationのSelect AllにおけるTermページ取得性能に限る。
 
-## 2. CR-01 — Bulk Term Selection Performance（改訂番号方式で実装工程）
+## 2. CR-01 — Bulk Term Selection Performance（改訂番号方式で本番反映済み）
 
 ### 2.1 採用方針と開発検証
 
@@ -22,7 +26,7 @@ Product Ownerの実装指示により、既存TermページAPIに改訂検証を
 
 migration v2でGlossary単位のrevision/epochを追加し、全Term更新をDBトリガーで原子的に捕捉する。APIは既存GETの版フィールド、expectedVersion、validateOnlyを追加し既存の通常ページ応答とPOSTを維持する。詳細・保証範囲・移行とPlatform手順は[CR-01技術設計](cr-01-parallel-fetch-design.md)を参照する。
 
-FR-733～FR-735とUC-011はこの採用方針に整合する。ローカル約97ページが高速、本番約40秒はProduct Owner観測であり、今回独立測定はしていない。p95≤20秒/逐次比50%以上短縮の性能受入はPlatform Teamによる別工程とする。Baseline 1.2全体のリリース承認とは区別する。
+FR-733～FR-735とUC-011はこの採用方針に整合する。ローカル約97ページが高速、旧版旧版本番約40秒はProduct Owner観測であり、今回独立測定はしていない。p95≤20秒/逐次比50%以上短縮の性能受入はPlatform Teamによる別工程とする。本番反映後の観測と未完了の性能受入は7章に記録する。
 
 ## 3. CR-02 — Public Landing Page Modernization
 
@@ -162,7 +166,7 @@ CR-02はFR-102～FR-112とUC-001を確定し、`de30d5a`でローカル実装を
 
 ## 5. デザイン実装時の対象ファイルと作業範囲
 
-| 将来の対象 | 目的と境界 |
+| 実装対象 | 目的と境界 |
 |---|---|
 | `src/app/page.tsx` | LP本体。Headerの4アンカー、Hero、Features、How It Works、Privacy、FAQ、CTA、Footerを実装する主要対象。現在は単一のServer Componentで、ここに route-specific metadata を定義することも候補。 |
 | `src/app/landing-visual.tsx` | コンセプトパネルとSVGの光軌跡。パネル内のCONCEPT表記を保持し、装飾内容を支援技術から除外する。 |
@@ -170,7 +174,7 @@ CR-02はFR-102～FR-112とUC-001を確定し、`de30d5a`でローカル実装を
 
 `src/app/layout.tsx`は認証後ページを含む共通Root Layoutで現在のtitle/descriptionを持つ。LPだけのSEO metadataはRoute `page.tsx`に定義できるため、共通layout変更を避ける方針とする（[Next.js Metadata docs](https://nextjs.org/docs/app/getting-started/metadata)）。`src/app/globals.css`も全画面共通のため、変更を避ける。`/login`、`/register`、Cognito API route、`src/app/app-shell.tsx`は変更しない。
 
-## 6. CR-02確定・確認記録（2026年11月8日）
+## 6. CR-02確定・確認記録（2026年11月8日、de30d5a時点の開発記録）
 
 Product OwnerとPlatform Teamから、Lavender Editionのローカル表示・基本機能の確認完了と最終Heroデザインの承認が報告された。先行レビューでCSS Modulesエラー解消と`#features`へのアンカー移動が確認されている。これをCR-02のローカル実装の固定点とする。
 
@@ -182,4 +186,10 @@ Product OwnerとPlatform Teamから、Lavender Editionのローカル表示・�
 
 ---
 
-**状態：CR-02関連仕様は2026年11月8日Product Owner承認済み・ローカル実装済み。CR-01は改訂番号方式による実装指示済み・性能未検証。Baseline 1.2全体のリリース承認は未実施。**
+**状態：CR-01・CR-02本番反映済み。性能受入未完了。Baseline 1.1のその他の要件・承認履歴を維持。**
+
+## 7. 本番反映・検証状態（2026年11月8日）
+
+2026年11月8日にCR-01・CR-02を本番反映（release `9783463dcdd3f3b10f743ab3e1488978b842b4be`）。Product Ownerは新LP表示と10,000 Term選択成功を本番ブラウザで確認した。旧版約40秒→新版約27秒（参考短縮率約32.5%）は同条件の正式なp95比較ではない。FR-734のp95≤20秒・逐次比50%以上短縮は達成済みとせず、正式な性能受入は未完了。本番Migration適用結果・systemd最終状態の実行ログは未提示で要確認。
+
+[Production As-Built](../infrastructure/production-as-built-2026-11-08.md)にActions Run `42481781676`、バックアップ・隔離DB移行・未確認事項を集約する。暫定デフォルト2、単一操作/同一タブ最大4の実装を維持する。隔離DBの件数とPASSを本番移行後の実測値として扱わない。過去の開発記録のBuild/Deploy未実施は当時の開発担当の範囲を指し、今回報告されたCI/Platformの本番リリースとは区別する。
