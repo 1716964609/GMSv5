@@ -1,5 +1,7 @@
 # GMS v5 — Glossary Management System
 
+**English** | [日本語](README.ja.md)
+
 GMS v5 is a multilingual glossary management and AI-assisted translation web application. Users manage their own terminology, select terms for a translation request, and use a two-stage DeepL → OpenAI translation flow with their own API keys.
 
 This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The production documentation baseline below records the 2026-11-08 JST release, distinguishing release reports, code/CI evidence, and unverified runtime evidence. Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
@@ -51,6 +53,8 @@ The Product Owner confirmed the new Lavender LP and successful selection of 10,0
 | Build | GitHub Actions ARM64 runner |
 | Release transfer | S3 Dualstack / AWS Systems Manager |
 | Process manager | systemd |
+
+For an interview-oriented walkthrough in Japanese, see the [production system diagram](README.ja.md#diagram-a--production-system-architecture), [application flow](README.ja.md#アプリケーション内部の処理), and [build and release diagram](README.ja.md#diagram-b--build--release-flow).
 
 ## Production Infrastructure Summary
 
