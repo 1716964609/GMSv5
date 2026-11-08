@@ -1,0 +1,32 @@
+{
+  "terms": [
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "無作為化比較試験",
+      "targetTerm": "Randomized controlled trial",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "主要評価項目",
+      "targetTerm": "Primary endpoint",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "臨床試験",
+      "targetTerm": "Clinical trial",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "インフォームド・コンセント",
+      "targetTerm": "Informed consent",
+      "description": "Synthetic public demo term"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "terms": [
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "有害事象",
+      "targetTerm": "Adverse event",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "重篤な有害事象",
+      "targetTerm": "Serious adverse event",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "蕁麻疹",
+      "targetTerm": "Urticaria",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "副作用",
+      "targetTerm": "Adverse drug reaction",
+      "description": "Synthetic public demo term"
+    }
+  ]
+}

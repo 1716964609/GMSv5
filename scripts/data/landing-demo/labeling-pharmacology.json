@@ -1,0 +1,32 @@
+{
+  "terms": [
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "禁忌",
+      "targetTerm": "Contraindication",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "薬物動態",
+      "targetTerm": "Pharmacokinetics",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "用法・用量",
+      "targetTerm": "Dosage and administration",
+      "description": "Synthetic public demo term"
+    },
+    {
+      "sourceLanguage": "JA",
+      "targetLanguage": "EN",
+      "sourceTerm": "使用上の注意",
+      "targetTerm": "Precautions for use",
+      "description": "Synthetic public demo term"
+    }
+  ]
+}
