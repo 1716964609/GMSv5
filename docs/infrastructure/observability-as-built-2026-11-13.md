@@ -2,7 +2,7 @@
 
 **Document type:** Infrastructure As-Built / Implementation Evidence  
 **Recorded:** 2026-11-13 (JST)  
-**Status:** Phase 1 production tracing and application metrics verified; RUM, alerting, SLO and automated recovery deferred  
+**Status:** Phase 1 production tracing and application metrics verified; RUM, alerting, SLO and automated recovery deferred
 **Scope:** EC2 #2 / monitoring platform only  
 **Intended repository path:** `docs/infrastructure/observability-as-built-2026-11-13.md`  
 **Related target design:** [`../architecture-as-to-be-add-observability.md`](../architecture-as-to-be-add-observability.md)  
@@ -265,7 +265,7 @@ df -hT /
 
 ## 11. Verified AWS Integration Update
 
-**Evidence date:** 2026-11-13 JST  
+**Evidence date:** 2026-11-13 JST
 **Status:** SRE transport and storage integration passed; application production rollout pending.
 
 ### 11.1 Trace storage
