@@ -9,13 +9,14 @@ GMS v5は、自分の用語集を管理し、翻訳に使う用語を選んでDe
 ## 公開サイトと現在のリリース
 
 - **公開サイト：** [sunlightjetrans.com](https://sunlightjetrans.com)
-- **本番アプリケーション：** `9783463dcdd3f3b10f743ab3e1488978b842b4be`（2026年11月8日）
+- **本番アプリケーション：** `364d0b7ebd4868f6d54b271ce9144b001bd380ca`（2026年11月14日に本番で確認）。直前のリリースは`9783463dcdd3f3b10f743ab3e1488978b842b4be`（2026年11月8日）で、切り戻し用に保持しています。
+- **監視：** サーバー側のTraceとMetricsを本番で有効化し、確認済みです。Browser RUMは実装済みですが本番では無効です。ログの集中管理、Edge監視、アラート、SLO、自動復旧は未完成です。
 - **Baseline 1.2：** 紫系の公開LP刷新（CR-02）と、大量用語選択の制限付き並列取得（CR-01）を本番反映。
 - **利用料金：** GMS自体は無料。DeepL・OpenAIのAPI利用料金は、利用者自身の契約条件に従います。
 
 LPのガラス調パネルは機能を伝えるコンセプトビジュアルです。実製品のスクリーンショットや、実行済み翻訳結果ではありません。
 
-以下の図は現行コードと既存の構築記録を要約しています。AWSへの再照会や本番試験は今回行っていません。実績と証拠の限界は[2026年11月8日As-Built](docs/infrastructure/production-as-built-2026-11-08.md)を優先します。
+以下の図は現行コードと既存の構築記録を要約しています。AWSへの再照会や本番試験は今回行っていません。実績と証拠の限界は[Production State](docs/infrastructure/production-state.md)と、そこから参照する日付付きAs-Builtを優先します。どの文書が何の根拠になるか、誰が責任を持つかは[Documentation Map](docs/README.md)にまとめています。
 
 ## 主な機能
 
@@ -38,6 +39,7 @@ LPのガラス調パネルは機能を伝えるコンセプトビジュアルで
 | 認証 | Amazon Cognito Classic Hosted UI / OAuth Authorization Code / PKCE S256 |
 | 公開・外部接続 | DreamHost DNS / Amazon CloudFront / Nginx / IPv6-first |
 | 構築・配布 | Terraformと手動設定 / GitHub Actions ARM64 / Amazon S3 / AWS Systems Manager |
+| 監視 | OpenTelemetry SDK / 別EC2上のOTLP Gateway・OpenTelemetry Collector・Tempo・Prometheus・Grafana（Phase 1） |
 
 ## システム全体の構成
 
@@ -84,6 +86,8 @@ flowchart TB
 ```
 
 実線の矢印は通常のWeb・内部処理、点線は名前解決または認証（ラベルで区別）、太線は外部翻訳APIへの送信を示します。DNSは名前解決だけを行い、HTTPリクエストを中継しません。認証の返却はCognitoからブラウザを介したリダイレクトで、通常の公開Ingressを通ってCallbackへ届きます。
+
+Diagram AはWeb公開と翻訳の経路を示します。リリース`364d0b7`で加わった監視の経路（Next.js → OTLP Gateway → Collector → Tempo / Prometheus → Grafana）は、[Architecture §14](docs/architecture.md)の図を参照してください。
 
 公開用CloudFrontとDeepL専用CloudFrontは別Distributionです。DeepL専用経路にはCloudFront FunctionsとKeyValueStoreによる共有トークン検証・API許可リストがあり、キャッシュは無効です。OpenAI通信はこのプロキシを経由しません。
 
@@ -140,6 +144,7 @@ SQLite migration v2は`glossary_term_revisions`を追加します。Glossaryご�
 | SQLiteを独立EBSへ保存 | アプリケーションのリリースと永続データを分離します。暗号化gp3とTerraformの`prevent_destroy`を使いますが、これだけでバックアップや高可用性が保証されるわけではありません。 |
 | 公開CloudFront → NginxをHTTPS化 | ViewerだけでなくOrigin接続もTLSで保護。構築記録ではOrigin側のネットワーク制限と専用認証ヘッダーを併用しています。 |
 | 並列数を制限 | 往復待ちの短縮を狙いながら、小型EC2・SQLiteへの負荷を抑える設計です。同期SQLite処理そのものが並列数に比例して速くなるとは見込みません。 |
+| 監視基盤を別EC2へ分離 | 本番EC2の資源を利用者の要求に優先させ、監視基盤の障害を本番から切り離します。監視基盤もSpot・単一のRoot EBSで動いており、バックアップと自動復旧は未整備です。 |
 
 理由の詳細は[10月26日As-Builtの設計判断](docs/infrastructure/production-as-built-2026-10-26.md#11-design-decisions--rationale)と[Architecture](docs/architecture.md)を参照してください。ネットワーク構成の説明は構築当時の記録を継承し、今回のライブAWS監査結果ではありません。
 
@@ -189,9 +194,11 @@ flowchart TB
     style HOST fill:#F7F7FA,stroke:#9B9BC7,color:#26213F;
 ```
 
-[ARM64 workflow](.github/workflows/build-arm64.yml)が自動化するのは、手動起動後の検査・ビルド・梱包・Artifact保存までです。以降はPlatform Teamがチェックサムを確認し、S3への配布とSSM経由のEC2切替を行います。Git pushだけで本番更新する完全自動CDではありません。現行workflowには単体・結合テストの実行ステップがないため、開発テスト83件をCIでの実行件数には数えません。
+[ARM64 workflow](.github/workflows/build-arm64.yml)が自動化するのは、手動起動後の検査・ビルド・梱包・Artifact保存までです。以降はPlatform Teamがチェックサムを確認し、S3への配布とSSM経由のEC2切替を行います。Git pushだけで本番更新する完全自動CDではありません。現行workflowには単体・結合テストの実行ステップがないため、開発テスト（`75d5b17`時点で114件）をCIでの実行件数には数えません。
 
 10月26日にはReadiness確認が早すぎて一度切り戻し、その後Retryを導入して再デプロイした記録があります。11月8日はActions Run `42481781676`の成功、SHA256照合済み・S3→SSM→systemdでの配布が報告されています。11月8日のsystemd最終出力や切戻し資産の現存確認は別途必要です。
+
+現行リリース`364d0b7`は、11月13日の[Build ARM64 Release #11 / Run 43435258778](https://github.com/1716964609/GMSv5/actions/runs/43435258778)（成功、Head SHA一致）の成果物です。SHA256照合済みは運用者の報告によります。本番での起動とReadiness 200は[Observability As-Built §12](docs/infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance)に記録されています。切替時のSSM Command IDとsystemdの最終出力は記録されていません。
 
 **SSMの記載差：** ArchitectureはRun Command、10月26日の手順は「SSMで接続」、11月8日の報告は「SSM経由」と記載しています。Session ManagerとRun Commandは異なる操作手段であり、Session Managerの使用実績まではこれらの記録から確定しません。図にも要確認として示し、推測で使用済みとは扱いません。
 
@@ -212,8 +219,9 @@ CognitoのAuthorization Code FlowをPKCE S256とOAuth stateで保護し、返却
 | Baseline 1.2本番ブラウザ | Product OwnerがLavender Edition LP表示と10,000 Term選択成功を確認。網羅的なE2E成功とは扱いません。 |
 | Select All所要時間 | 旧版約40秒 → 新版約27秒、参考短縮率約32.5%。同条件の反復測定・正式なp95比較ではありません。 |
 | 性能受入 | p95≤20秒・逐次比50%以上短縮は暫定目標。上記観測から達成済みとはしません。同時数1・2・4の正式比較は未実施です。 |
-| 開発検証 | 既存記録では単体・結合83件成功・失敗0件、型チェック成功、Lintエラー0件・既存警告2件。今回の文書作業では再実行していません。 |
-| Build | Actions Run `42481781676`成功とArtifactのrelease SHA照合はAs-Builtに記録済み。SHA256 Verifiedはリリース報告によります。 |
+| 監視 Phase 1（2026年11月14日） | 本番の実リクエストのTraceをGrafanaで確認。翻訳1件は約6.87秒、うちDeepL約3.22秒、OpenAI約3.64秒。Prometheusの監視対象は4/4が稼働。1回の観測であり、基準値やSLOではありません。 |
+| 開発検証 | Baseline 1.2の記録では単体・結合83件成功・失敗0件。Observability実装後（`75d5b17`）の記録では114件成功、型チェック成功、Lintエラー0件・既存警告2件。今回の文書作業では再実行していません。 |
+| Build | Run `43435258778`（Release #11、`364d0b7`）とRun `42481781676`（Release #10、`9783463`）の成功とHead SHAの一致を確認済み。SHA256 Verifiedは運用者の報告によります。 |
 | バックアップ・移行準備 | オンラインバックアップ整合性OK、EBS snapshot completed、隔離DB v1→v2と整合性検証PASSとの報告。本番移行後の実測値には置き換えません。 |
 | 要確認 | 本番Migration適用ログ、systemd最終状態、Rollback資産と復元試験、変更409・Abort等の網羅的E2E、端末幅・支援技術・SEOの総合評価。 |
 
@@ -227,6 +235,17 @@ CognitoのAuthorization Code FlowをPKCE S256とOAuth stateで保護し、返却
 | ローカル認証のポート | `.env.example`は3000、CognitoのTerraform定義は3100を許可しています。下記手順では3100に揃えますが、実際に利用するCognitoの許可URLは設定担当者に確認してください。 |
 
 これらは今回の文書作業で仕様や設定を変更せず、確認事項として明示しています。SSMの操作手段の記載差も前節のとおりです。
+
+## リポジトリ構成と責任範囲
+
+1つのリポジトリの中で、DevelopmentとInfrastructureをパスで分けています。将来Infrastructureを別リポジトリへ移せるようにするためです。
+
+| 領域 | コード | 文書 | 責任 |
+|---|---|---|---|
+| Development | `src/`、`test/`、`e2e/`、`scripts/`、ビルド設定 | [docs/development/](docs/development/README.md)、仕様の文書、`docs/design/` | Development |
+| Infrastructure | `infra/` | [docs/infrastructure/](docs/infrastructure/README.md) | Infrastructure / SRE |
+
+アプリケーションの変更は`infra/`に触れず、インフラの変更は`src/`・`test/`・`e2e/`に触れません。両者が接するのは、リリース成果物、`.env.example`の環境変数名、Telemetryの仕様だけです。詳しくは[Documentation Map](docs/README.md)を参照してください。
 
 ## ローカル開発
 
@@ -272,11 +291,16 @@ node --experimental-strip-types --test test/*.test.ts
 | [Product Vision](docs/vision.md) | 製品の目的と対象範囲 |
 | [Requirements](docs/requirements.md) / [Use Cases](docs/use-cases.md) | 要件、操作フロー、受入条件 |
 | [Entity Model](docs/entity-model.md) | 業務エンティティと所有関係 |
-| [Production Architecture](docs/architecture.md) | ネットワーク・認証・永続化の詳細 |
-| [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | 現行リリースの実績、根拠と未確認事項 |
+| [Documentation Map](docs/README.md) | 問いごとの正となる文書、文書の優先順位、責任分担、AI Agent向けの読み順 |
+| [Production Architecture](docs/architecture.md) | ネットワーク・認証・永続化・監視の構成（As-Is） |
+| [Production State](docs/infrastructure/production-state.md) | 現在の本番状態。実測、Terraformの管理範囲、手動構築、未実装を区別 |
+| [Development文書](docs/development/README.md) / [Telemetry Schema v1](docs/development/observability/application-instrumentation.md) | アプリケーションの範囲、Span・Metric・設定・Redactionの定義 |
+| [Infrastructure文書](docs/infrastructure/README.md) / [Observability As-Built 2026-11-13](docs/infrastructure/observability-as-built-2026-11-13.md) | インフラの範囲と記録の規則、監視基盤の証跡（§12が11月14日の本番受入） |
+| [Architecture As-To-Be — Add Observability](docs/architecture-as-to-be-add-observability.md) | 監視の目標構成。未実装の項目を含む |
+| [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | Baseline 1.2（`9783463`）の実績、根拠と未確認事項（履歴） |
 | [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | 初期構築とDeepL接続障害への対応履歴 |
 | [CR-01技術設計](docs/design/cr-01-parallel-fetch-design.md) | 制限付き並列取得・改訂管理・性能測定計画 |
 | [Baseline 1.2デザイン記録](docs/design/baseline-1.2-proposal.md) | 公開LPの承認済み方針と変更履歴 |
-| [Terraform](infra/terraform/v5/main.tf) / [ARM64 workflow](.github/workflows/build-arm64.yml) | コード化された構築・ビルド範囲 |
+| [Terraform（本番）](infra/terraform/v5/main.tf) / [Terraform（監視）](infra/terraform/observability/main.tf) / [ARM64 workflow](.github/workflows/build-arm64.yml) | コード化された構築・ビルド範囲 |
 
 図はGitHubが標準対応するMermaid fenced code blockで管理しています。構文の参照先は[GitHubの図の作成方法](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams)と[Mermaid flowchart仕様](https://mermaid.js.org/syntax/flowchart.html)です。GitHub側の描画バージョンや画面幅による最終的な見え方は、Product Ownerのリポジトリレビューで確認してください。

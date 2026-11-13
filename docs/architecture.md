@@ -1,15 +1,18 @@
 # GMS v5 — Production Architecture
 
-**基準日:** 2026-11-08（JST）
-**状態:** Production Architecture / Implementation Baseline
-**対象リリース:** `9783463dcdd3f3b10f743ab3e1488978b842b4be`
+**基準日:** 2026-11-14（JST）
+**状態:** Production Architecture / Implementation Baseline（Architecture As-Is）
+**対象リリース:** `364d0b7ebd4868f6d54b271ce9144b001bd380ca`（直前のRelease：`9783463dcdd3f3b10f743ab3e1488978b842b4be`）
 **公開URL:** `https://sunlightjetrans.com`
+**文書の位置付け:** [Documentation Map](README.md)。現在の本番状態の根拠は[production-state.md](infrastructure/production-state.md)
 
 ## 1. 文書の位置付け
 
-本書は2026年11月8日のリリースコードと提示された本番実績を反映する。ネットワーク・AWS構成は10月26日の記録を継承し、今回ライブ環境で再監査していない。本番Migration適用ログとsystemd最終状態は未提示で要確認。
+本書は本番構成の設計上の説明（Architecture As-Is）である。2026年11月14日時点のRelease `364d0b7`と、Observability Phase 1の本番受入までを反映する。§2〜§13は2026年11月8日のBaseline 1.2（Release `9783463`）の内容を引き継ぎ、Release `364d0b7`で加わったApplicationの計装と監視基盤は§14に記載する。ネットワーク・AWS構成は10月26日の記録を継承し、ライブ環境での再監査は行っていない。本番Migration適用ログとsystemd最終状態は未提示で要確認。
 
-GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻訳とOpenAIによるポストエディティングを行う、単一EC2上のModular Monolithである。DeepL専用CloudFront Reverse Proxyは既存構成として維持する。今回の変更は紫系公開LPと改訂番号付き制限並列取得である。
+本書は要約であり、証跡ではない。記載と日付付きAs-Builtが食い違う場合はAs-Builtを正とする。
+
+GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻訳とOpenAIによるポストエディティングを行う、単一EC2上のModular Monolithである。DeepL専用CloudFront Reverse Proxyは既存構成として維持する。Baseline 1.2の変更は紫系公開LPと改訂番号付き制限並列取得、Release `364d0b7`の変更はApplicationのOpenTelemetry計装である。
 
 機能要件、エンティティ、ユースケースは次の文書をSource of Truthとする。
 
@@ -19,6 +22,13 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 - [Use Case Diagram](use-case-diagram.puml)
 - [Production As-Built 2026-11-08](infrastructure/production-as-built-2026-11-08.md)
 - [Historical As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)
+
+現在の本番状態と監視基盤は次の文書を正とする。
+
+- [Production State](infrastructure/production-state.md) — 実測、Terraformの管理範囲、手動構築、未実装の区分
+- [Observability As-Built 2026-11-13](infrastructure/observability-as-built-2026-11-13.md) — 監視基盤とPhase 1本番受入の証跡
+- [Telemetry Schema v1](development/observability/application-instrumentation.md) — Span、Metric、設定、Redactionの定義
+- [Architecture As-To-Be — Add Observability](architecture-as-to-be-add-observability.md) — 目標構成。未実装の項目を含む
 
 ## 2. Architecture Principles
 
@@ -30,6 +40,7 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 - 翻訳本文、中間訳、最終訳は業務データベースへ永続化しない。
 - DeepLのIPv4到達性問題はDeepL専用CloudFront経路で解決し、他の外部通信をその経路へリダイレクトしない。
 - Kubernetes、コンテナオーケストレーション、NAT Gateway、DNS64、NAT64は使用しない。
+- Telemetryの収集・保存・可視化はProduction EC2とは別のObservability EC2で行う。Applicationは送信に失敗しても処理を続ける設計とする（本番での停止試験は未実施）。
 
 ## 3. Technology Stack
 
@@ -53,8 +64,10 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 | IaC | Terraformと手動設定の併用 |
 | Build | GitHub Actions ARM64 runner |
 | Release transfer | S3 Dualstack / AWS SSM |
+| Telemetry | OpenTelemetry SDK（Server Traces / Metrics）。Browser RUMは本番無効 |
+| Observability | 別EC2上のOTLP Gateway / OTel Collector / Tempo / Prometheus / Grafana（Phase 1） |
 
-Prometheus/Grafana、Spot停止時の自動復旧、Git pushだけで本番更新する完全自動CDは、現在のProduction Architectureに実装済みの構成として扱わない。
+Spot停止時の自動復旧、Git pushだけで本番更新する完全自動CD、Alerting、Logs集中管理は、現在のProduction Architectureに実装済みの構成として扱わない。Prometheus / GrafanaはPhase 1の範囲（ApplicationのTraces / Metricsと、監視基盤自身のHost Metrics）で稼働している（§14）。
 
 ## 4. Ingress — 既存Web公開経路
 
@@ -64,7 +77,7 @@ flowchart LR
     DNS --> CF[Existing CloudFront\nE1EF0DWDYA2XH8]
     CF -->|HTTPS / IPv6| ORIGIN[origin-v5.sunlightjetrans.com]
     ORIGIN -->|TCP 443| NGINX[EC2 Nginx\nLet's Encrypt]
-    NGINX -->|127.0.0.1:3000| NEXT[Next.js / Node.js\n9783463]
+    NGINX -->|127.0.0.1:3000| NEXT[Next.js / Node.js\n364d0b7]
     NEXT --> DB[SQLite]
     DB --> EBS[独立暗号化EBS\n/mnt/gms-data/gmsv5.sqlite]
 ```
@@ -169,6 +182,14 @@ OpenAIは既存のネイティブIPv6経路を使用する。DeepL専用CloudFro
 
 DeepL APIキーはユーザーが登録するBYO API Keyであり、CloudFront Functionの共有プロキシトークンとは異なる。共有トークンをユーザーAPIキーとして扱わない。
 
+### 7.3 OTLP TokenとCA証明書
+
+- OTLP Gatewayの認証Header：`X-OTLP-Token`
+- Tokenの保管先：AWS Systems Manager Parameter StoreのSecureString
+- EC2 IAMロールに`/gmsv5/prod/observability/otlp-token`の`ssm:GetParameter`を許可している（Terraform `ssm-otlp-read.tf`）。Production EC2からの取得は確認済み。
+- GatewayのServer証明書を検証するCA公開証明書：`/etc/ssl/certs/gmsv5-otel-ca.pem`
+- Token、CAの秘密鍵、Server証明書の秘密鍵はリポジトリや文書へ記載しない。
+
 ## 8. Authentication and Application Runtime
 
 Amazon Cognito LiteのClassic Hosted UIを使用する。
@@ -225,7 +246,9 @@ Build成果物はARM64用tar.gzとSHA-256ファイルである。デプロイで
 
 2026-10-26の切り替えでは、起動直後のReadinessが早すぎたため一度ロールバックし、その後Readiness Retryを導入して再デプロイに成功した。これは当時の手動デプロイ手順の改善であり、完全自動CDの完成を意味しない。
 
-2026年11月8日の[Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676)はbuild job成功、artifact head SHAは現行releaseと一致。SHA256 Verified、S3→SSM→systemdの配布はリリース報告による。切替/readinessログ・systemd最終状態は要確認。workflowには単体/結合テストの実行ステップがなく、開発83件の結果と区別する。バックアップ・隔離DB・ロールバック資産の確認状態は[現行As-Built](infrastructure/production-as-built-2026-11-08.md)に記録する。
+2026年11月8日の[Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676)はbuild job成功、artifact head SHAは現行releaseと一致。SHA256 Verified、S3→SSM→systemdの配布はリリース報告による。切替/readinessログ・systemd最終状態は要確認。workflowには単体/結合テストの実行ステップがなく、開発83件の結果と区別する。バックアップ・隔離DB・ロールバック資産の確認状態は[2026年11月8日のAs-Built](infrastructure/production-as-built-2026-11-08.md)に記録する。
+
+2026年11月13日の[Run 43435258778](https://github.com/1716964609/GMSv5/actions/runs/43435258778)（Build ARM64 Release #11）はSuccessで、Head SHAは現行Release `364d0b7`と一致する。Branchは`feat/gmsv5-otel`。SHA256検証済みはOperatorの報告による。本番での起動とHTTP Readiness 200は[Observability As-Built §12](infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance)に記録されている。切替のSSM Command IDとsystemdの最終出力は未記録。Release `9783463`はRollback用に保持している。
 
 ## 11. TLS and Periodic Operations
 
@@ -242,7 +265,10 @@ Build成果物はARM64用tar.gzとSHA-256ファイルである。デプロイで
 
 次の項目は本Production Architectureに実装済みとは記載しない。
 
-- Prometheus/Grafanaの本番監視基盤
+- Browser RUMの本番有効化
+- Logs集中管理、CloudFront / Nginx / DNSのEdge監視、Production EC2のHost Metrics
+- Alerting、SLI / SLO、監視基盤の自動復旧とBackup
+- 監視基盤のホスト構成（Container、設定、証明書）のTerraform化
 - Git pushだけで本番更新する完全自動CD
 - Spot停止時の自動インスタンス補充・ENI/EBS再接続
 - 正式な1/2/4性能比較とp95≤20秒・逐次比50%以上短縮の達成
@@ -254,3 +280,44 @@ Product Ownerは新LPと10,000件選択成功を本番ブラウザで確認し�
 ## 13. Related Record
 
 現行releaseの証跡と未確認事項は[Production As-Built 2026-11-08](infrastructure/production-as-built-2026-11-08.md)を参照する。過去の本番構築・検証の時系列記録は[Production As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)に記載する。過去の初回公開リリース`f5fb681`と、その時点の検証結果は履歴として同文書に保持する。
+
+Release `364d0b7`と監視基盤の証跡は[Observability As-Built 2026-11-13](infrastructure/observability-as-built-2026-11-13.md)の§11〜§12、現在の状態の要約は[Production State](infrastructure/production-state.md)を参照する。
+
+## 14. Observability — Phase 1（2026-11-14）
+
+Release `364d0b7`でApplicationにOpenTelemetry計装を加え、Production EC2とは別のObservability EC2へTelemetryを送る。目標構成の全体は[As-To-Be](architecture-as-to-be-add-observability.md)にある。ここには、実際に構築され本番で確認された範囲だけを書く。
+
+```mermaid
+flowchart LR
+    APP[Next.js / gmsv5.service\nProduction EC2] -->|OTLP/HTTPS over IPv6\nTCP 8443| GW[OTLP Gateway\nNginx / TLS / X-OTLP-Token]
+    GW --> COL[OTel Collector]
+    COL -->|Traces| TEMPO[Tempo]
+    PROM[Prometheus] -->|Scrape| COL
+    GRAF[Grafana] --> TEMPO
+    GRAF --> PROM
+    OP[Operator] -.->|SSM Port Forwarding| GRAF
+```
+
+### 14.1 Application側
+
+- `GMS_OTEL_ENABLED=true`のときだけSDKを読み込む。無効時は計装なしで従来どおり動作する。
+- Server TracesはOTLP/HTTP protobuf、MetricsはOTLP/HTTP JSONで送る。Endpoint、認証Header、CAは環境変数で受け取る。
+- 送信直前にRedactionを行う。原文、訳文、用語、API Key、Cookie、Query StringをTelemetryに含めない。
+- DeepL、OpenAI、Cognitoなど外部へは`traceparent`を伝播しない。
+- Browser RUMは実装済みだが、本番では無効である。
+- Span名、Metric名、属性、設定項目は[Telemetry Schema v1](development/observability/application-instrumentation.md)で定義する。
+
+### 14.2 Observability EC2
+
+- Production EC2とは別のInstance（`t4g.small`、Persistent Spot、Public IPv4なし）。Docker上でOTLP Gateway、OTel Collector、Tempo、Prometheus、Grafana、Node Exporterを動かす。
+- 外部から到達できる受信口はIPv6 TCP 8443のOTLP Gatewayのみ。Security GroupでProduction EC2のIPv6アドレスに限定する。CollectorとTempoのポートはホストへ公開しない。
+- GatewayはPrivate CAの証明書でTLSを終端し、`X-OTLP-Token`を検証してからCollectorへ中継する。
+- GrafanaとPrometheusはLoopbackで待ち受け、OperatorはSSM Port Forwardingで接続する。
+- データはRoot EBS（10 GiB）に保存する。保存期間の設定はPrometheusが3日または512MB、Tempoが24時間。
+
+### 14.3 確認済みの範囲と限界
+
+- 確認済み：本番の実リクエストのTraceがGrafanaで見えること、Application MetricsがPrometheusに入ること、Tokenなしの送信が401で拒否されること。
+- Terraformが定義するのはEC2、Security Group、IAMまでである。Container、各設定、証明書、Token、Dashboardはホスト上で手動構築しており、リポジトリに定義が無い。
+- 監視基盤停止時の本番継続、本番Traceの機密情報確認、計測オーバーヘッドは、本番での確認記録が無い。
+- 未実装の項目と未確認の項目は[Production State §6〜§7](infrastructure/production-state.md)にまとめてある。

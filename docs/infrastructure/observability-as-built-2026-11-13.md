@@ -8,14 +8,26 @@
 **Related target design:** [`../architecture-as-to-be-add-observability.md`](../architecture-as-to-be-add-observability.md)  
 **Existing production design:** [`../architecture.md`](../architecture.md)
 
+**Current-state summary:** [`production-state.md`](production-state.md) — read that first for the present state of both EC2 instances.
+
 > **Evidence policy:** This record is based on the command outputs and Grafana screenshots supplied by the operator on 2026-11-12 to 2026-11-13 JST, plus the Terraform configuration generated during setup. It is not an independent live AWS audit. **Confirmed operating state**, **declared configuration**, and **unimplemented plans** are distinguished below. Nothing here certifies that the production GMS v5 application is already instrumented.
 
 
 > **2026-11-13 evening update:** Sections 1–10 preserve the initial deployment snapshot. Section 11 supersedes their outdated runtime and network status. The Production Application SDK is not deployed.
 
+> **Reading guide (added 2026-11-14):** This record has three layers. Where they differ, the later layer is the evidence; earlier text is kept unchanged as history.
+>
+> - **§1–§10 — initial deployment snapshot (2026-11-12/13).** Superseded where §11–§12 differ: Tempo is installed, the Collector exports traces to Tempo instead of the debug exporter, the Security Group has one inbound rule (TCP 8443 from the Production instance), and the production application is instrumented. `infra/terraform/observability/` has been tracked in Git since commit `c7b75e0`.
+> - **§11 — AWS integration (2026-11-13 evening).** Items that §11 and §11.6 list as pending and that §12 records as verified are superseded by §12.
+> - **§12 — Production Phase 1 acceptance (2026-11-14).** Latest evidence.
+>
+> Two sentences above describe the state before §12 and are superseded by it: "Nothing here certifies that the production GMS v5 application is already instrumented" and "The Production Application SDK is not deployed".
+
 ## 1. Purpose and scope
 
 The newly provisioned Observability EC2 is an independent *Operations Plane* for GMS v5. Its first milestone is to run OpenTelemetry Collector, Prometheus, Grafana, and Node Exporter and monitor **the Observability EC2 itself**. It does **not** yet receive application traces, application metrics, production Nginx logs, SQLite metrics, or production EC2 host metrics.
+
+> **Superseded (2026-11-14):** As of §12 this instance receives production application traces and metrics, including SQLite metrics. It still does not receive production Nginx logs or production EC2 host metrics.
 
 This document records **what has actually been installed and tested**. Desired future instrumentation, alerting, security extensions, and architecture changes belong in the linked *Architecture As-To-Be* and subsequent ADRs.
 
@@ -78,6 +90,8 @@ flowchart TB
 - OTel Collector currently listens on container ports `4317` (gRPC) and `4318` (HTTP); these ports are **not** exposed from Docker to the EC2 host for production traffic.
 - Existing Terraform Security Group defines no inbound access. Its egress is IPv6 `::/0`. Production → Observability network ingress, authentication, and TLS are **not implemented**.
 
+> **Superseded (2026-11-13):** The diagram label "OTLP not connected yet" and the last bullet above describe the initial snapshot. An authenticated OTLP/HTTPS gateway now listens on IPv6 TCP 8443 and the Security Group allows that port from the Production instance only (§11.3, §11.4). Collector ports 4317 / 4318 remain unpublished on the host.
+
 ## 4. Installed software (verified from Docker runs and logs)
 
 | Container | Image / tag | Docker memory cap | Measured usage (2026-11-13) | Function |
@@ -93,6 +107,7 @@ All four containers were running during the submitted verification. Docker uses 
 
 - **Metrics:** OTLP receiver → memory limiter → batch → Prometheus exporter on `:8889`.
 - **Traces:** OTLP receiver → memory limiter → batch → **debug exporter**. **No durable trace storage yet**; production user content must not be sent to this debug exporter.
+  - **Superseded (2026-11-13):** traces are now exported to Tempo over OTLP/gRPC (§11.2).
 - Collector's self-metrics are exposed on `:8888`.
 - A successful scrape of the `:8889` exporter means the endpoint responds; **it does not prove any GMS production application metric has arrived**.
 - Collector memory limiter is configured at 120 MiB, with a 24 MiB spike allowance and 1-second check interval.
@@ -219,6 +234,8 @@ df -hT /
 
 ## 8. Not implemented / not verified
 
+> **Superseded in part (2026-11-14):** Four rows changed after this snapshot — the production OTel SDK, production SQLite instrumentation and DeepL / OpenAI client spans are verified in §12, and Tempo is installed (§11.1). The other rows still stand. The maintained list is [`production-state.md` §6](production-state.md).
+
 | Capability | Status |
 |---|---|
 | GMS v5 production OTel SDK | **Not yet connected / no proof of installation** |
@@ -236,6 +253,8 @@ df -hT /
 | Formal SLI/SLO, retention cost and capacity test | Not completed |
 
 ## 9. Next steps — design intent, not As-Built
+
+> **Status (2026-11-14):** Steps 3–5 were carried out (§11–§12). No completion is recorded for step 1 (dashboard export) or for the backup and interruption-recovery part of step 2.
 
 1. Confirm and save the four-panel Grafana dashboard, then export the dashboard JSON for configuration-as-code.
 2. Confirm EC2 #2's inbound and outbound paths, IAM permissions, data retention/backup and interruption recovery policy before connecting production.
@@ -267,6 +286,7 @@ df -hT /
 
 **Evidence date:** 2026-11-13 JST
 **Status:** SRE transport and storage integration passed; application production rollout pending.
+**Superseded (2026-11-14):** the application production rollout is verified in §12.
 
 ### 11.1 Trace storage
 
@@ -380,6 +400,8 @@ or deployed at the time of this update.
 
 The telemetry-disabled deployment is a separate release stage.
 No production application release is asserted by this document.
+
+> **Superseded in part (2026-11-14):** §12 records release `364d0b7`, which contains commit `75d5b17`, running in production with telemetry enabled. From the "not yet verified or completed" list above, §12 verifies the Application SDK deployment, the SDK export on Linux ARM64 under systemd, production Application Metrics ingestion, and retrieval of the SSM SecureString token from the Production instance. How the token is supplied to the service at startup is not recorded. The remaining items still stand: Browser RUM, automatic gateway restoration, certificate renewal and secret rotation, Tempo capacity testing, and Loki / log centralization / alerting / SLO.
 
 ## 12. Production Phase 1 Acceptance
 

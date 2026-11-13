@@ -2,11 +2,45 @@
 ## Add Observability
 
 **Document Type:** Architecture Design / Target State  
-**Status:** Draft — Proposed, Not Implemented  
+**Status:** Target Architecture — Phase 0・Phase 1は実装済み、Phase 2〜4は未実装（2026-11-14更新。下記「Implementation Status」を参照）\
 **Created:** 2026-11-12  
 **System:** GMS v5 — Glossary Management System  
 **Scope:** Observability / SRE Operations Infrastructure  
 **Baseline:** Production Release `9783463` (2026-11-08)
+
+**文書の位置付け:** [Documentation Map](README.md)。現在の本番状態は[production-state.md](infrastructure/production-state.md)を参照する。
+
+---
+
+# Implementation Status — 2026-11-14
+
+本書は目標構成（As-To-Be）を定義する。設計本文は2026-11-12の作成時のままであり、**実装済みの範囲はこの節だけが示す**。現在の本番状態の根拠は本書ではなく、[production-state.md](infrastructure/production-state.md)と[Observability As-Built](infrastructure/observability-as-built-2026-11-13.md)である。
+
+## Phase別の状態
+
+| Phase | 状態 | 根拠 |
+|---|---|---|
+| Phase 0 — Design and Local PoC | 完了（ローカル検証） | [Telemetry Schema §10](development/observability/application-instrumentation.md)、[ローカル検証記録](development/observability/application-instrumentation-verification-2026-11-13.md) |
+| Phase 1 — Observability Infrastructure | Application Traces / Metricsについて本番受入PASS。Acceptance Criteriaのうち「Observability EC2停止時もGMSは利用可能」の本番試験と「追加AWSコスト」の記録は無い。Terraformによる定義は部分的 | [Observability As-Built §11〜§12](infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance)、[production-state.md §4〜§5](infrastructure/production-state.md) |
+| Phase 2 — Full-Stack Observability | 一部のみ。SQLite MetricsとNode.js Runtime Metricsは本番で確認済み。Browser RUMはコードのみで本番無効。CloudFront Server-Timing、Nginx Timing Log、Production Host Metrics、CloudWatch連携、Synthetic Monitoring、Logs集中管理、Dashboard A〜Dは未実装 | [production-state.md §6](infrastructure/production-state.md) |
+| Phase 3 — SRE Operations Readiness | 未着手（SLI / SLO、Alert、Runbook、Incident Simulation） | 同上 |
+| Phase 4 — Performance and Automation | 対象外（後続計画） | 本書§12 |
+
+## Componentの状態
+
+| Component（§3.3） | 状態 |
+|---|---|
+| OpenTelemetry SDK（Application） | 本番で有効（Release `364d0b7`） |
+| OpenTelemetry Collector | 稼働 |
+| Prometheus | 稼働。Targets 4/4 UP |
+| Grafana Tempo | 稼働 |
+| Grafana | 稼働。SSM Port Forwardingで閲覧 |
+| OTLP Gateway（Nginx、TLSとToken認証） | 稼働。§3.3の表には無いComponentで、§9.3とOD-06の実装として追加された |
+| Grafana Loki | 未導入 |
+| Alertmanager | 未導入 |
+| CloudWatch連携 | 未実装 |
+| Browser RUM | コードはあるが本番無効 |
+| Synthetic Monitoring（DNS / HTTPS） | 未実装 |
 
 ---
 
@@ -52,10 +86,12 @@ GMS v5は現在、Next.js Standalone、SQLite、Amazon EC2 Spot、CloudFront、C
 
 既存の本番構成は以下の文書をSource of Truthとする。
 
-- [Production Architecture](https://github.com/1716964609/GMSv5/blob/main/docs/architecture.md)
-- [Production As-Built — 2026-11-08](https://github.com/1716964609/GMSv5/blob/main/docs/infrastructure/production-as-built-2026-11-08.md)
-- [Requirements](https://github.com/1716964609/GMSv5/blob/main/docs/requirements.md)
-- [Use Cases](https://github.com/1716964609/GMSv5/blob/main/docs/use-cases.md)
+- [Production Architecture](architecture.md)
+- [Production As-Built — 2026-11-08](infrastructure/production-as-built-2026-11-08.md)
+- [Requirements](requirements.md)
+- [Use Cases](use-cases.md)
+
+> **2026-11-14 注記：** この章は本書作成時（2026-11-12、Release `9783463`）のBaselineである。現在の本番状態は[production-state.md](infrastructure/production-state.md)を参照する。
 
 ## 2.1 Current Production Components
 
@@ -77,6 +113,8 @@ GMS v5は現在、Next.js Standalone、SQLite、Amazon EC2 Spot、CloudFront、C
 | Infrastructure Management | Terraform + Manual Configuration |
 
 現行構成では、専用のPrometheus、Tempo、Grafanaなどの本番Observability Platformは実装済みとして扱わない。
+
+> **Superseded（2026-11-14）：** 上の一文は2026-11-12時点の記述である。Phase 1でObservability EC2上にCollector、Prometheus、Tempo、Grafana、OTLP Gatewayが構築され、稼働している（[Observability As-Built §11〜§12](infrastructure/observability-as-built-2026-11-13.md)）。
 
 ## 2.2 Existing Constraints
 
@@ -195,6 +233,8 @@ CollectorからPrometheusへの接続は概念的なMetrics Pipelineである。
 | Synthetic Monitoring | DNS / HTTPS Probes | External Availability | Proposed |
 
 各Componentの正式バージョン、EC2 Instance Type、保存期間、必要ストレージ容量はPoC後に決定する。
+
+> **2026-11-14 注記：** 表の「Decision」列は設計時点の区分である。実際に導入されたComponentとVersionは冒頭の「Implementation Status」と[production-state.md §3.5](infrastructure/production-state.md)を参照する。
 
 ---
 
@@ -351,7 +391,7 @@ Candidate Spans:
 
 既存のNext.js Automatic Instrumentationを優先して利用し、取得できない業務処理のみManual Instrumentationを追加する。
 
-> 正式なSpan / Metric名称と属性は [Telemetry Schema v1](observability/application-instrumentation.md) で定義した（2026-11-13）。Production適用は未実施。
+> 正式なSpan / Metric名称と属性は [Telemetry Schema v1](development/observability/application-instrumentation.md) で定義した（2026-11-13）。Server Traces / MetricsはRelease `364d0b7`で本番に適用済み（2026-11-14検証）。Browser RUMは本番無効。
 
 ## 5.6 SQLite
 
@@ -750,6 +790,8 @@ GMS v5では一人が複数の役割を実施するが、設計上は責任境�
 
 ## Phase 0 — Design and Local Proof of Concept
 
+**Status（2026-11-14）：** 完了（ローカル検証）。
+
 **Goal:** Productionへ変更を加える前にTelemetry Pipelineを検証する。
 
 Tasks:
@@ -770,6 +812,8 @@ Tasks:
 - SDKとStandalone Runtimeの互換性が確認できる。
 
 ## Phase 1 — Observability Infrastructure
+
+**Status（2026-11-14）：** Application Traces / Metricsについて本番受入PASS。未確認の受入条件とTerraform化の残りは冒頭の「Implementation Status」を参照。
 
 **Goal:** Productionとは分離されたObservability EC2を構築する。
 
@@ -792,6 +836,8 @@ Tasks:
 - 追加AWSコストを確認できる。
 
 ## Phase 2 — Full-Stack Observability
+
+**Status（2026-11-14）：** 一部のみ実装。大半は未実装。
 
 **Goal:** BrowserからDatabaseおよび外部APIまでを統合する。
 
@@ -816,6 +862,8 @@ Tasks:
 - 収集できない区間は「推定」「測定不可」と明記できる。
 
 ## Phase 3 — SRE Operations Readiness
+
+**Status（2026-11-14）：** 未着手。
 
 **Goal:** 観測データを信頼性運用へ利用する。
 
@@ -927,6 +975,20 @@ As-To-BeをAs-Isと誤認して操作してはならない。
 
 PoC・性能測定・コスト試算・Security Reviewの証跡に基づいて更新する。
 
+> **2026-11-14 注記：** 上の表の「Status」は本書作成時のままである。Phase 1で実際に採用された構成を下に記す。これはAs-Builtの事実であり、DecisionとしてCloseするかどうかはOwnerが別途判断する。
+
+| ID | Phase 1で実際に採用された構成 | 根拠 |
+|---|---|---|
+| OD-01 | `t4g.small` | Observability As-Built §2 |
+| OD-02 | Persistent Spot、中断時Stop | Observability As-Built §2 |
+| OD-03 | Root EBS（10 GiB gp3）上のLocal Backend。Object Storageは不使用 | Observability As-Built §11.1 |
+| OD-04 | CollectorのPrometheus Exporter（`:8889`）をPrometheusがScrape | Observability As-Built §4.1、§4.2 |
+| OD-05 | Lokiは未導入 | Observability As-Built §8 |
+| OD-06 | IPv6のOTLP/HTTPS（8443）。Nginx GatewayでTLS終端、Private CA、Header `X-OTLP-Token`、Security GroupでProduction EC2のみ許可 | Observability As-Built §11.3、§11.4 |
+| OD-07 | 本番の設定値は記録なし。Applicationの既定は`parentbased_always_on` | [Telemetry Schema §7](development/observability/application-instrumentation.md) |
+| OD-08 | Prometheusは3日または512MB、Tempoは24時間。Logsは対象なし | Observability As-Built §4.2、§11.1 |
+| OD-09〜OD-13 | 変更なし（未決定または保留） | — |
+
 ---
 
 # 15. Definition of Done
@@ -949,6 +1011,27 @@ Observability Architectureの導入完了は、ツールのインストールだ
 - [ ] Telemetry Storage・Retention・Monthly Costが把握されている。
 - [ ] 主要な障害を観測データから説明できる。
 - [ ] 実装結果がArchitecture As-Builtへ反映されている。
+
+> **2026-11-14 注記：** 上のChecklistは受入時にOwnerが確認するためのもので、今回は変更していない。現時点の充足状況を下に記す。
+
+| 条件 | 状況（2026-11-14） |
+|---|---|
+| ProductionとObservabilityの実行基盤の分離 | 充足。Observability EC2が別Instanceで稼働 |
+| OpenTelemetryによるApplication Tracing | 充足。本番で確認済み |
+| Browser User Actionの所要時間 | 未充足。RUMは本番無効 |
+| Nginx / Next.js / SQLiteの処理時間の区別 | 一部。Next.jsとSQLiteは可、Nginxは未実装 |
+| DeepLとOpenAIの外部API遅延 | 充足。本番で確認済み |
+| CloudFrontとOriginのTiming | 未充足 |
+| SQLite・EC2・EBSの主要Metrics | 一部。SQLiteのファイルサイズとFilesystem空き容量は可。Production EC2のHost Metricsは未収集 |
+| DNS / HTTPS Synthetic Monitoring | 未充足 |
+| Grafana Dashboard 4種類 | 未充足。記録にあるのは監視基盤自身のDashboard 1つ |
+| Telemetryの機密情報保護の検証 | 一部。ローカルとSREのローカル経路で検証済み。本番Traceでの確認記録は無い |
+| Observability障害がProductionを停止させない | 一部。ローカルで検証済み。本番での試験記録は無い |
+| Storage・Retention・Monthly Cost | 一部。保存期間は設定済み。月額コストの記録は無い |
+| 主要な障害を観測データから説明できる | 未充足 |
+| 実装結果のAs-Built反映 | 充足（Phase 1の範囲） |
+
+根拠は[production-state.md](infrastructure/production-state.md)にまとめてある。
 
 ---
 
@@ -977,15 +1060,17 @@ Architecture As-Isは現在の実態を記録し、Architecture As-To-Beは将�
 **Project Source of Truth**
 
 - [GMS v5 Repository](https://github.com/1716964609/GMSv5)
-- [Production Architecture](https://github.com/1716964609/GMSv5/blob/main/docs/architecture.md)
-- [Production As-Built](https://github.com/1716964609/GMSv5/blob/main/docs/infrastructure/production-as-built-2026-11-08.md)
+- [Documentation Map / Source of Truth](README.md)
+- [Production Architecture](architecture.md)
+- [Production State（現在の本番状態）](infrastructure/production-state.md)
+- [Production As-Built — 2026-11-08](infrastructure/production-as-built-2026-11-08.md)
 
 **Design Decisions / Evidence（本書から派生）**
 
-- [Application Instrumentation Design / Telemetry Schema v1](observability/application-instrumentation.md) — §5.1, §5.5–5.7, §6, §9 のApplication側設計（2026-11-13、ローカル検証済み・Production未適用）
-- [Application Instrumentation — Local Verification and SRE Handoff (2026-11-13)](observability/application-instrumentation-verification-2026-11-13.md)
-- [Application Observability — Production Release Readiness (2026-11-13)](observability/application-release-readiness-2026-11-13.md) — 検証結果・本番Deployment / Rollback手順・Telemetry有効化Gate
-- [Observability Infrastructure As-Built (2026-11-13)](infrastructure/observability-as-built-2026-11-13.md)
+- [Application Instrumentation Design / Telemetry Schema v1](development/observability/application-instrumentation.md) — §5.1, §5.5–5.7, §6, §9 のApplication側設計（Server Traces / Metricsは本番適用済み、Browser RUMは本番無効）
+- [Application Instrumentation — Local Verification and SRE Handoff (2026-11-13)](development/observability/application-instrumentation-verification-2026-11-13.md) — ローカル検証の記録（Historical）
+- [Application Observability — Production Release Readiness (2026-11-13)](development/observability/application-release-readiness-2026-11-13.md) — Release前の判定と手順（Historical。対象Releaseは本番稼働中）
+- [Observability Infrastructure As-Built (2026-11-13)](infrastructure/observability-as-built-2026-11-13.md) — §12が2026-11-14の本番受入記録
 
 **Technical References**
 
@@ -999,6 +1084,6 @@ Architecture As-Isは現在の実態を記録し、Architecture As-To-Beは将�
 
 **End of Document**
 
-**Status: Architecture As-To-Be / Observability Design Draft**
+**Status: Architecture As-To-Be / Target Architecture — Phase 0・Phase 1実装済み、Phase 2〜4未実装（2026-11-14）**
 
 実装開始前に未決定事項を解消し、各Phaseの受入条件を確認すること。

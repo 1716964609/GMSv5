@@ -1,5 +1,7 @@
 # GMS v5 — Baseline 1.2 Production As-Built
 
+> **Historical（2026-11-14追記）：** 本書は2026年11月8日のBaseline 1.2リリース（`9783463`）の記録である。下の「Current release」は記録時点の値であり、現在の本番Releaseは`364d0b7`である。`9783463`はRollback用に保持されている。現在の状態は[production-state.md](production-state.md)を参照する。本文は記録時のまま変更していない。
+
 **記録日:** 2026-11-08（JST）
 
 **Current release:** `9783463dcdd3f3b10f743ab3e1488978b842b4be`

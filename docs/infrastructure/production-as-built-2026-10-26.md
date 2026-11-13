@@ -1,5 +1,7 @@
 # GMS v5 — Production Infrastructure As-Built
 
+> **Historical（2026-11-14追記）：** 本書は2026年10月26日時点の記録である。Release番号と、§12の「監視専用EC2、Prometheus/Grafana…は実装済みと認定していない」は当時の状態で、現在はObservability EC2が稼働している。Ingress、TLS、Nginx、Runtime、認証、永続化については、今も本書が最新の証跡である。現在の状態は[production-state.md](production-state.md)を参照する。本文は記録時のまま変更していない。
+
 **記録日:** 2026-10-26（JST）
 **対象:** GMS v5 2026年10月26日時点の本番稼働構成
 **Application Release:** `51cba4a`

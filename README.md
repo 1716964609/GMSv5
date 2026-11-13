@@ -4,14 +4,18 @@
 
 GMS v5 is a multilingual glossary management and AI-assisted translation web application. Users manage their own terminology, select terms for a translation request, and use a two-stage DeepL → OpenAI translation flow with their own API keys.
 
-This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The production documentation baseline below records the 2026-11-08 JST release, distinguishing release reports, code/CI evidence, and unverified runtime evidence. Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
+This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The status below reflects the verified state as of 2026-11-14 JST. It distinguishes measured evidence, operator reports, and unverified items; the evidence is indexed in [Production State](docs/infrastructure/production-state.md). Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
+
+To find which document is the source of truth for a given question, and who owns it, start with the [Documentation Map](docs/README.md).
 
 ## Production Status
 
 - Public URL: <https://sunlightjetrans.com>
-- Current application release: `9783463dcdd3f3b10f743ab3e1488978b842b4be` (2026-11-08)
-- Previous release: `5f0c6e7`; Lavender LP commit: `de30d5a`
-- [Build ARM64 Release #10 / Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676): Success; artifact SHA256 verified per release report
+- Current application release: `364d0b7ebd4868f6d54b271ce9144b001bd380ca` (verified in production 2026-11-14)
+- [Build ARM64 Release #11 / Run 43435258778](https://github.com/1716964609/GMSv5/actions/runs/43435258778): Success; head SHA matches the release; artifact SHA256 verified per operator report
+- Previous release: `9783463dcdd3f3b10f743ab3e1488978b842b4be` (2026-11-08, retained for rollback), built by [Release #10 / Run 42481781676](https://github.com/1716964609/GMSv5/actions/runs/42481781676)
+- Earlier: `5f0c6e7`; Lavender LP commit: `de30d5a`
+- Observability: server traces and metrics enabled and verified in production; Browser RUM is implemented but disabled
 - Initial production release: `f5fb681` on 2026-10-25
 - Runtime: Amazon Linux 2023 / ARM64 / Node.js 26 / Next.js Standalone
 - Process: `gmsv5.service`
@@ -19,7 +23,9 @@ This repository follows Spec-Driven Development and Simon Martinelli's AI Unifie
 
 The DeepL IPv4 reachability issue was addressed in release `51cba4a` by adding a dedicated CloudFront Reverse Proxy. OpenAI continues to use the EC2 native IPv6 path.
 
-The Product Owner confirmed the new Lavender LP and successful selection of 10,000 Terms in production. Select All was observed at approximately 27 seconds versus 40 seconds previously (about 32.5% reduction). This is not a controlled p95 comparison; the provisional ≤20-second / ≥50% improvement targets are not met by these observations and formal performance acceptance remains pending. Production migration completion logs and the final systemd state remain unverified. See the [current As-Built](docs/infrastructure/production-as-built-2026-11-08.md).
+The Product Owner confirmed the new Lavender LP and successful selection of 10,000 Terms in production. Select All was observed at approximately 27 seconds versus 40 seconds previously (about 32.5% reduction). This is not a controlled p95 comparison; the provisional ≤20-second / ≥50% improvement targets are not met by these observations and formal performance acceptance remains pending. Production migration completion logs and the final systemd state remain unverified. See the [2026-11-08 As-Built](docs/infrastructure/production-as-built-2026-11-08.md).
+
+Release `364d0b7` adds OpenTelemetry instrumentation to the application; it contains no schema change. The application sends server traces and metrics over authenticated OTLP/HTTPS to a separate observability EC2 instance running an OTLP gateway, OpenTelemetry Collector, Tempo, Prometheus and Grafana. In the [Phase 1 acceptance record](docs/infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance), a production translation request was observed at about 6.87 seconds, with DeepL at about 3.22 seconds and OpenAI post-editing at about 3.64 seconds. That is a single observation, not a baseline or an SLO. Centralized logs, edge monitoring, alerting, SLOs and automated recovery are not complete, and the observability host is only partly reproducible from Terraform.
 
 ## Core Features
 
@@ -53,6 +59,8 @@ The Product Owner confirmed the new Lavender LP and successful selection of 10,0
 | Build | GitHub Actions ARM64 runner |
 | Release transfer | S3 Dualstack / AWS Systems Manager |
 | Process manager | systemd |
+| Telemetry | OpenTelemetry SDK (server traces and metrics) |
+| Observability | Separate EC2: OTLP gateway, OpenTelemetry Collector, Tempo, Prometheus, Grafana (Phase 1) |
 
 For an interview-oriented walkthrough in Japanese, see the [production system diagram](README.ja.md#diagram-a--production-system-architecture), [application flow](README.ja.md#アプリケーション内部の処理), and [build and release diagram](README.ja.md#diagram-b--build--release-flow).
 
@@ -141,6 +149,7 @@ npm run lint
 npm run test:db
 npm run test:usecases
 npm run test:browserless
+npm run test:observability
 npm run test:e2e
 ```
 
@@ -163,28 +172,49 @@ For local direct DeepL access, use `DEEPL_API_URL=https://api-free.deepl.com/v2/
 
 Do not call paid external APIs from local tests unless explicitly intended. The automated provider tests use local mocks.
 
+## Repository Structure and Ownership
+
+This is a monorepo. Development and Infrastructure are separated by path so that Infrastructure can later move to its own repository.
+
+| Area | Code | Documentation | Owner |
+|---|---|---|---|
+| Development | `src/`, `test/`, `e2e/`, `scripts/`, build configuration | [docs/development/](docs/development/README.md), specifications and `docs/design/` | Development |
+| Infrastructure | `infra/` | [docs/infrastructure/](docs/infrastructure/README.md) | Infrastructure / SRE |
+
+A change to application code does not touch `infra/`, and an infrastructure change does not touch `src/`, `test/` or `e2e/`. The two areas meet only at the release artifact, the environment variable names in `.env.example`, and the telemetry schema. The full boundary is in the [Documentation Map](docs/README.md).
+
 ## Documentation
 
 | Document | Description |
 |---|---|
+| [Documentation Map](docs/README.md) | Source of truth per question, document precedence, ownership, reading order for AI agents |
 | [Product Vision](docs/vision.md) | Product goals and scope |
 | [Requirements](docs/requirements.md) | Functional and non-functional requirements |
 | [Entity Model](docs/entity-model.md) | Domain entities and business constraints |
 | [Use Cases](docs/use-cases.md) | System behavior and acceptance criteria |
 | [Use Case Diagram](docs/use-case-diagram.puml) | PlantUML use case model |
-| [Production Architecture](docs/architecture.md) | Current production architecture |
-| [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | Current release, evidence and outstanding verification |
-| [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | Historical production record |
+| [Production Architecture](docs/architecture.md) | Current production architecture (As-Is) |
+| [Production State](docs/infrastructure/production-state.md) | Current production state: measured results, Terraform scope, manual configuration, unimplemented items |
+| [Development documentation](docs/development/README.md) | Application scope, design records, application observability |
+| [Telemetry Schema v1](docs/development/observability/application-instrumentation.md) | Spans, metrics, attributes, configuration and redaction |
+| [Infrastructure documentation](docs/infrastructure/README.md) | Infrastructure scope, evidence rules, As-Built index |
+| [Observability As-Built 2026-11-13](docs/infrastructure/observability-as-built-2026-11-13.md) | Observability platform evidence; §12 is the 2026-11-14 production acceptance |
+| [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | Historical: Baseline 1.2 release `9783463` |
+| [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | Historical: initial build; still the latest evidence for ingress, TLS and runtime |
+| [Architecture As-To-Be — Add Observability](docs/architecture-as-to-be-add-observability.md) | Target observability architecture, including items not yet implemented |
 
 ## Explicit Boundaries
 
 The following are not represented as implemented production capabilities:
 
-- Prometheus/Grafana production monitoring
+- Browser RUM in production
+- Centralized logs, edge monitoring (CloudFront, Nginx, DNS) and production host metrics
+- Alerting, SLOs and automated recovery of either EC2 instance
+- Full Terraform reproducibility of the observability host (containers, configuration and certificates were set up manually)
 - Fully automatic CD from Git push to EC2
 - Automatic Spot replacement and ENI/EBS recovery
 - Formal 1/2/4 concurrency performance comparison and achievement of the provisional p95 targets
 - Comprehensive production E2E, zero-term translation and confirmed temporary glossary cleanup for this release
 - Execution-log verification of production migration completion, final systemd state and rollback asset availability
 
-This documentation refresh records release status without changing functional acceptance criteria. Baseline 1.1 approval/release history and the October As-Built are preserved. No AWS, database, build or deployment operations were performed during the refresh.
+The documentation refreshes record release status without changing functional acceptance criteria. Baseline 1.1 approval/release history and the earlier As-Built records are preserved. The 2026-11-14 refresh changed documentation only: no application code, Terraform, AWS, systemd, secret, database, build or deployment operation was performed.
