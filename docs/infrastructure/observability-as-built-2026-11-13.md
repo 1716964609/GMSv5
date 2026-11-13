@@ -2,13 +2,16 @@
 
 **Document type:** Infrastructure As-Built / Implementation Evidence  
 **Recorded:** 2026-11-13 (JST)  
-**Status:** Initial observability EC2 and self-monitoring operational; production application not yet connected  
+**Status:** AWS Metrics, Traces, and authenticated production-to-observability transport verified; Production Application SDK not deployed  
 **Scope:** EC2 #2 / monitoring platform only  
 **Intended repository path:** `docs/infrastructure/observability-as-built-2026-11-13.md`  
 **Related target design:** [`../architecture-as-to-be-add-observability.md`](../architecture-as-to-be-add-observability.md)  
 **Existing production design:** [`../architecture.md`](../architecture.md)
 
 > **Evidence policy:** This record is based on the command outputs and Grafana screenshots supplied by the operator on 2026-11-12 to 2026-11-13 JST, plus the Terraform configuration generated during setup. It is not an independent live AWS audit. **Confirmed operating state**, **declared configuration**, and **unimplemented plans** are distinguished below. Nothing here certifies that the production GMS v5 application is already instrumented.
+
+
+> **2026-11-13 evening update:** Sections 1–10 preserve the initial deployment snapshot. Section 11 supersedes their outdated runtime and network status. The Production Application SDK is not deployed.
 
 ## 1. Purpose and scope
 
@@ -259,3 +262,121 @@ df -hT /
 - [`GMSv5/infra/terraform/v5/main.tf`](https://github.com/1716964609/GMSv5/blob/main/infra/terraform/v5/main.tf) — existing **production** Terraform; **not** the new EC2 #2 state.
 
 **Documentation rule:** A Terraform declaration is not proof that every AWS setting was live-audited. A successful `up` probe is not proof of incoming production telemetry. Changes to the As-To-Be are not silently treated as applied production state.
+
+## 11. Verified AWS Integration Update
+
+**Evidence date:** 2026-11-13 JST  
+**Status:** SRE transport and storage integration passed; application production rollout pending.
+
+### 11.1 Trace storage
+
+- `gms-tempo`: `grafana/tempo:3.1.1`
+- Monolithic deployment on `gms-observability` Docker bridge
+- Memory cap: 384 MiB; initial observation: 16.41 MiB
+- Local backend at `/opt/gmsv5-observability/tempo-data`
+- Config: `/opt/gmsv5-observability/tempo/tempo.yaml`
+- Configured block retention: 24 hours
+- No Tempo ports published on the EC2 host
+- Readiness returned `ready`
+- Grafana Tempo data source URL: `http://gms-tempo:3200`
+
+Trace retention is not a hard filesystem-size limit.
+The backend uses the 10 GiB root EBS and has no independently
+verified backup or Spot recovery procedure.
+
+### 11.2 Collector integration
+
+- `gms-otel`: `otel/opentelemetry-collector:0.165.0`
+- Metrics: OTLP receiver -> memory_limiter -> batch -> Prometheus exporter
+- Traces: OTLP receiver -> memory_limiter -> batch -> OTLP/gRPC Tempo exporter
+- Trace destination: `gms-tempo:4317`
+- Collector OTLP ports 4317/4318 remain unpublished on the host
+- Config backup: `/opt/gmsv5-observability/otel/config.yaml.bak-20261113`
+- New configuration validated; restart logs reported `Everything is ready`
+
+### 11.3 Authenticated OTLP ingress
+
+- Container: `gms-otlp-gateway`
+- Image: `nginx:1.30.6-alpine-slim`
+- Memory cap: 128 MiB
+- Host listener: IPv6 TCP 8443
+- Internal upstream: `http://gms-otel:4318`
+- HTTPS with a private CA and IPv6 address SAN
+- Application authentication header: `X-OTLP-Token`
+- Accepted paths: POST `/v1/traces` and `/v1/metrics`
+- Gateway configuration: `/opt/gmsv5-observability/otlp-gateway/`
+- CA certificate lifetime: 365 days at issuance
+- Server certificate lifetime: 90 days at issuance
+
+Tokenless OTLP test returned 401.
+Authenticated OTLP test returned 200.
+
+The active Nginx configuration currently contains the token.
+This is an operational secret; it must not be committed to Git.
+Certificate renewal, rotation, and bootstrapping remain manual.
+
+### 11.4 AWS network security
+
+Production EC2:
+`i-0decf6bc205e273d9`
+
+Observability EC2:
+`i-021170e56849c597b`
+
+Both instances are in VPC `vpc-0a798b79427124107`
+and subnet `subnet-0661039664bcdb978`.
+
+Observability SG: `sg-07daa1cdcf79d6c93`
+
+Added Terraform-managed ingress:
+- Protocol: TCP
+- Port: 8443
+- Source: `2406:da14:190f:d655:3b6:c3da:aeb4:17c7/128`
+- Rule ID: `sgr-0d1314a10664f19e6`
+
+Terraform apply result: 1 added, 0 changed, 0 destroyed.
+
+No changes to the existing CloudFront origin ingress were required.
+
+### 11.5 Verified end-to-end traces
+
+Internal Observability EC2 smoke test:
+- Service: `gms-sre-smoke`
+- Span: `sre.smoke.trace`
+- Grafana query returned the 50 ms span
+
+Production EC2 to Observability EC2:
+- Transport: IPv6 HTTPS with CA verification
+- Authentication: `X-OTLP-Token`
+- Service: `gms-production-connectivity-test`
+- Operation: `production.to.observability.smoke`
+- Trace ID: `9c5e82bd22e6b9a808dcf53f1402dfba`
+- Grafana displayed one service, one span, 50 ms
+
+The 50 ms duration is the synthetic span duration,
+not measured inter-EC2 network latency.
+
+### 11.6 Release and operations boundaries
+
+Verified:
+- Collector -> Tempo -> Grafana
+- Production EC2 -> TLS Gateway -> Collector -> Tempo -> Grafana
+- Authentication rejection and acceptance
+
+Not yet verified or completed:
+- Production GMS v5 Application SDK deployment
+- Linux ARM64 systemd-based SDK export in production
+- Production Application Metrics ingestion
+- Browser RUM approval and production rollout
+- Parameter Store IAM access and service startup integration
+- Automatic gateway restoration after EC2 replacement
+- Server certificate renewal and secret rotation
+- Tempo long-running capacity and disk exhaustion testing
+- Loki, production log centralization, alerting, and SLO operations
+
+The Application release candidate is commit `75d5b17`
+on branch `feat/gmsv5-otel`, committed but not pushed
+or deployed at the time of this update.
+
+The telemetry-disabled deployment is a separate release stage.
+No production application release is asserted by this document.
