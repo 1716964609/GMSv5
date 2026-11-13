@@ -2,7 +2,7 @@
 
 **Document type:** Infrastructure As-Built / Implementation Evidence  
 **Recorded:** 2026-11-13 (JST)  
-**Status:** AWS Metrics, Traces, and authenticated production-to-observability transport verified; Production Application SDK not deployed  
+**Status:** Phase 1 production tracing and application metrics verified; RUM, alerting, SLO and automated recovery deferred  
 **Scope:** EC2 #2 / monitoring platform only  
 **Intended repository path:** `docs/infrastructure/observability-as-built-2026-11-13.md`  
 **Related target design:** [`../architecture-as-to-be-add-observability.md`](../architecture-as-to-be-add-observability.md)  
@@ -380,3 +380,78 @@ or deployed at the time of this update.
 
 The telemetry-disabled deployment is a separate release stage.
 No production application release is asserted by this document.
+
+## 12. Production Phase 1 Acceptance
+
+**Verified:** 2026-11-14 JST
+**Release:** 364d0b7
+**Result:** PASS — Application Traces and Metrics
+
+### Application
+
+- GMS v5 Next.js Standalone deployed on Production ARM64 EC2.
+- Application started successfully with Telemetry enabled.
+- Production HTTP Readiness returned 200.
+- RUM remains disabled.
+- Release 9783463 retained for rollback.
+
+### Distributed Tracing
+
+- Production Next.js -> IPv6 HTTPS Gateway -> Collector -> Tempo.
+- Real requests visible in AWS Grafana.
+- Translation request observed at approximately 6.87 seconds.
+- DeepL business span: approximately 3.22 seconds.
+- OpenAI post-edit span: approximately 3.64 seconds.
+- SQLite read span: approximately 1.84 milliseconds.
+- Real translation result displayed successfully.
+
+### Application Metrics
+
+Prometheus target health: 4/4 UP.
+
+Confirmed Metric families:
+- HTTP server request duration
+- Translation duration and selected term count
+- DeepL/OpenAI external request duration
+- SQLite operation duration
+- SQLite DB/WAL/SHM file size and filesystem availability
+- Node.js event loop delay p50/p99/max
+- Process memory, V8 heap usage, and uptime
+
+Prometheus discovery query returned 32 distinct Metric names
+matching the application-related name filters.
+
+### Observability EC2 Resource Snapshot
+
+- Tempo: 28.18 MiB / 384 MiB
+- OTel Collector: 24.99 MiB / 192 MiB
+- Prometheus: 43.88 MiB / 640 MiB
+- Grafana: 358.1 MiB / 512 MiB
+- OTLP Gateway: 2.81 MiB / 128 MiB
+- Root filesystem: 41% used, 5.9 GiB available
+- System MemAvailable: approximately 1.0 GiB
+- Swap: none
+
+### Issues Encountered and Resolved
+
+- Production CA certificate initially inaccessible because
+  /etc/gmsv5 was root-only (0700).
+- Public CA certificate relocated to
+  /etc/ssl/certs/gmsv5-otel-ca.pem.
+- Application HTTP readiness rechecked after restart.
+- SSM SecureString token retrieval verified using IPv6 endpoint.
+- No application rollback was required.
+
+### Deferred Scope
+
+- Browser RUM and Web Vitals production collection
+- Centralized application and infrastructure logs
+- CloudFront, Nginx and DNS end-to-end telemetry
+- Alerting, SLIs/SLOs and automated remediation
+- Production host-level monitoring expansion
+- Certificate rotation and gateway rebuild automation
+- Long-term capacity and recovery testing
+
+Phase 1 verifies production application instrumentation,
+transport, storage, and queryability. It does not establish
+full production observability operational maturity.
