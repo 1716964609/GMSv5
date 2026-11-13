@@ -160,3 +160,15 @@ output "root_volume_id" {
 output "security_group_id" {
   value = aws_security_group.observability.id
 }
+
+# OTLP/HTTPS from GMS v5 Production EC2 only.
+resource "aws_vpc_security_group_ingress_rule" "otlp_from_production" {
+  security_group_id = aws_security_group.observability.id
+
+  description = "OTLP HTTPS from GMSv5 Production"
+  ip_protocol = "tcp"
+  from_port   = 8443
+  to_port     = 8443
+
+  cidr_ipv6 = "2406:da14:190f:d655:3b6:c3da:aeb4:17c7/128"
+}
