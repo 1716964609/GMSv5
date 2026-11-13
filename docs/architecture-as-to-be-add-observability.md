@@ -351,6 +351,8 @@ Candidate Spans:
 
 既存のNext.js Automatic Instrumentationを優先して利用し、取得できない業務処理のみManual Instrumentationを追加する。
 
+> 正式なSpan / Metric名称と属性は [Telemetry Schema v1](observability/application-instrumentation.md) で定義した（2026-11-13）。Production適用は未実施。
+
 ## 5.6 SQLite
 
 **Objective:** Databaseの性能・エラー・容量を観測する。
@@ -977,6 +979,13 @@ Architecture As-Isは現在の実態を記録し、Architecture As-To-Beは将�
 - [GMS v5 Repository](https://github.com/1716964609/GMSv5)
 - [Production Architecture](https://github.com/1716964609/GMSv5/blob/main/docs/architecture.md)
 - [Production As-Built](https://github.com/1716964609/GMSv5/blob/main/docs/infrastructure/production-as-built-2026-11-08.md)
+
+**Design Decisions / Evidence（本書から派生）**
+
+- [Application Instrumentation Design / Telemetry Schema v1](observability/application-instrumentation.md) — §5.1, §5.5–5.7, §6, §9 のApplication側設計（2026-11-13、ローカル検証済み・Production未適用）
+- [Application Instrumentation — Local Verification and SRE Handoff (2026-11-13)](observability/application-instrumentation-verification-2026-11-13.md)
+- [Application Observability — Production Release Readiness (2026-11-13)](observability/application-release-readiness-2026-11-13.md) — 検証結果・本番Deployment / Rollback手順・Telemetry有効化Gate
+- [Observability Infrastructure As-Built (2026-11-13)](infrastructure/observability-as-built-2026-11-13.md)
 
 **Technical References**
 

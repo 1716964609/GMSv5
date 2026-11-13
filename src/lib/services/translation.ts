@@ -1,5 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import type { Span } from "@opentelemetry/api";
+
+import { safeRecord, secondsSince } from "../observability/metrics.ts";
+import { ATTR, SPAN, type TranslationOutcome } from "../observability/schema.ts";
+import {
+  classifyError,
+  withSpan,
+  withSpanSync,
+} from "../observability/spans.ts";
+
 import {
   findTranslationTerms,
   getCredentialSecret,
@@ -67,7 +77,15 @@ function selectedTerms(
   if (uniqueIds.size !== input.selectedTermIds.length) {
     throw new AppError(400, "INVALID_TERM_SELECTION", "selectedTermIds must not contain duplicates");
   }
-  const terms = findTranslationTerms(db, userId, input.selectedTermIds);
+  const terms = withSpanSync(
+    SPAN.sqliteReadTranslationTerms,
+    () => findTranslationTerms(
+      db,
+      userId,
+      input.selectedTermIds,
+    ),
+    { attributes: { [ATTR.selectedTermCount]: input.selectedTermIds.length } },
+  );
   if (terms.length !== input.selectedTermIds.length) {
     throw new AppError(403, "TERM_ACCESS_DENIED", "One or more selected terms are not owned by the user");
   }
@@ -159,27 +177,93 @@ function providerSecret(db: DatabaseSync, userId: string, provider: "DEEPL" | "O
   return decryptSecret(encrypted);
 }
 
+type TranslationProviders = {
+  deepL?: TranslationProvider;
+  openAI?: TranslationProvider;
+};
+
+/**
+ * Outcome classification for the Translation Success Rate SLI candidate
+ * (As-To-Be §8.1): user-input errors and term conflicts are distinguished
+ * from external dependency failures and internal faults.
+ */
+export function translationOutcome(error: unknown): TranslationOutcome {
+  if (error instanceof TranslationConflictError) {
+    return "conflict";
+  }
+  const { errorClass } = classifyError(error);
+  if (errorClass === "client") return "client_error";
+  if (errorClass === "dependency") return "dependency_error";
+  return "server_error";
+}
+
+/**
+ * Telemetry boundary of the translation use case. Records only counts,
+ * lengths and outcome codes — never the original text, the DeepL
+ * intermediate translation, the OpenAI output, terms or API keys
+ * (As-To-Be §9.1).
+ */
 export async function translateUseCase(
   db: DatabaseSync,
   userId: string,
   input: TranslationRequestInput,
-  providers: {
-    deepL?: TranslationProvider;
-    openAI?: TranslationProvider;
-  } = {},
+  providers: TranslationProviders = {},
 ): Promise<TranslationResult> {
-  const originalText = requiredString(input.originalText, "originalText", {
-    maxLength: 2_000_000,
+  const start = performance.now();
+  const selectedCount = Array.isArray(input?.selectedTermIds) ? input.selectedTermIds.length : undefined;
+  return withSpan(
+    SPAN.translationRequest,
+    async (span) => {
+      let outcome: TranslationOutcome = "success";
+      let errorType: string | undefined;
+      try {
+        return await executeTranslation(db, userId, input, providers, span);
+      } catch (error) {
+        outcome = translationOutcome(error);
+        errorType = classifyError(error).errorType;
+        throw error;
+      } finally {
+        span.setAttribute(ATTR.translationOutcome, outcome);
+        const seconds = secondsSince(start);
+        safeRecord(({ translationDuration, translationSelectedTerms }) => {
+          translationDuration.record(seconds, {
+            [ATTR.translationOutcome]: outcome,
+            ...(errorType ? { "error.type": errorType } : {}),
+          });
+          if (selectedCount !== undefined) {
+            translationSelectedTerms.record(selectedCount, { [ATTR.translationOutcome]: outcome });
+          }
+        });
+      }
+    },
+    selectedCount !== undefined ? { attributes: { [ATTR.selectedTermCount]: selectedCount } } : {},
+  );
+}
+
+async function executeTranslation(
+  db: DatabaseSync,
+  userId: string,
+  input: TranslationRequestInput,
+  providers: TranslationProviders,
+  requestSpan: Span,
+): Promise<TranslationResult> {
+  const { originalText, sourceLanguage, targetLanguage } = withSpanSync(SPAN.translationValidate, () => {
+    const originalText = requiredString(input.originalText, "originalText", {
+      maxLength: 2_000_000,
+    });
+    const sourceLanguage = requiredString(input.sourceLanguage, "sourceLanguage", {
+      maxLength: 50,
+    });
+    const targetLanguage = requiredString(input.targetLanguage, "targetLanguage", {
+      maxLength: 50,
+    });
+    if (input.consentConfirmed !== true) {
+      throw new AppError(400, "TRANSLATION_CONSENT_REQUIRED", "External data transmission consent is required");
+    }
+    return { originalText, sourceLanguage, targetLanguage };
   });
-  const sourceLanguage = requiredString(input.sourceLanguage, "sourceLanguage", {
-    maxLength: 50,
-  });
-  const targetLanguage = requiredString(input.targetLanguage, "targetLanguage", {
-    maxLength: 50,
-  });
-  if (input.consentConfirmed !== true) {
-    throw new AppError(400, "TRANSLATION_CONSENT_REQUIRED", "External data transmission consent is required");
-  }
+  // Length only (UTF-16 code units); the text itself is never recorded.
+  requestSpan.setAttribute(ATTR.sourceTextLength, originalText.length);
 
   const normalizedInput = {
     ...input,
@@ -188,9 +272,23 @@ export async function translateUseCase(
     targetLanguage,
   };
   const terms = selectedTerms(db, userId, normalizedInput);
-  const effective = effectiveTerms(terms, normalizedInput);
-  const deepLKey = providerSecret(db, userId, "DEEPL");
-  const openAIKey = providerSecret(db, userId, "OPENAI");
+  const effective = withSpanSync(SPAN.translationResolveTerms, (span) => {
+    try {
+      const resolved = effectiveTerms(terms, normalizedInput);
+      span.setAttribute(ATTR.effectiveTermCount, resolved.length);
+      return resolved;
+    } catch (error) {
+      if (error instanceof TranslationConflictError) {
+        span.setAttribute(ATTR.conflictCount, error.conflicts.length);
+      }
+      throw error;
+    }
+  });
+  requestSpan.setAttribute(ATTR.effectiveTermCount, effective.length);
+  const { deepLKey, openAIKey } = withSpanSync(SPAN.credentialsLoad, () => ({
+    deepLKey: providerSecret(db, userId, "DEEPL"),
+    openAIKey: providerSecret(db, userId, "OPENAI"),
+  }));
   const selectedProvider = providers.deepL ?? deepLProvider;
   const postEditor = providers.openAI ?? openAIProvider;
   const providerTerms = effective.map((term) => ({
@@ -198,24 +296,34 @@ export async function translateUseCase(
     targetTerm: term.targetTerm,
   }));
 
-  const initialTranslation = await selectedProvider.translate(
-    {
-      originalText,
-      sourceLanguage,
-      targetLanguage,
-      terms: providerTerms,
-    },
-    deepLKey,
+  const initialTranslation = await withSpan(
+    SPAN.deeplTranslate,
+    () =>
+      selectedProvider.translate(
+        {
+          originalText,
+          sourceLanguage,
+          targetLanguage,
+          terms: providerTerms,
+        },
+        deepLKey,
+      ),
+    { attributes: { [ATTR.provider]: "deepl", [ATTR.effectiveTermCount]: providerTerms.length } },
   );
-  const translatedText = await postEditor.translate(
-    {
-      originalText,
-      initialTranslation,
-      sourceLanguage,
-      targetLanguage,
-      terms: providerTerms,
-    },
-    openAIKey,
+  const translatedText = await withSpan(
+    SPAN.openaiPostEdit,
+    () =>
+      postEditor.translate(
+        {
+          originalText,
+          initialTranslation,
+          sourceLanguage,
+          targetLanguage,
+          terms: providerTerms,
+        },
+        openAIKey,
+      ),
+    { attributes: { [ATTR.provider]: "openai", [ATTR.effectiveTermCount]: providerTerms.length } },
   );
   return { translatedText, executionStatus: "SUCCESS" };
 }

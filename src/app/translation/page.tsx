@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Glossary, Term, TermPage, TranslationConflict } from "@/lib/domain/types";
 import { AppShell } from "../app-shell";
+import { startUserAction } from "@/lib/observability/rum-client";
+import { useUserActionCompletion } from "@/lib/observability/use-user-action";
 import { executeSelectAll } from "@/lib/translation/bulk-term-selection";
 import { getTabTermScheduler, termFetchConcurrency } from "@/lib/translation/term-fetch-scheduler";
 import { isAbortError, TermRequestCoordinator } from "@/lib/translation/term-requests";
@@ -31,8 +33,9 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   });
   const payload = (await response.json().catch(() => ({}))) as T & ApiError;
   if (!response.ok) {
-    const error = new Error(payload.error?.message ?? "翻訳に失敗しました") as Error & { conflicts?: TranslationConflict[] };
+    const error = new Error(payload.error?.message ?? "翻訳に失敗しました") as Error & { conflicts?: TranslationConflict[]; status?: number };
     error.conflicts = payload.error?.details?.conflicts;
+    error.status = response.status;
     throw error;
   }
   return payload;
@@ -66,6 +69,7 @@ export default function TranslationPage() {
   const expandedRef = useRef(expanded);
   const selectedRef = useRef(selected);
   const termPagesRef = useRef(termPages);
+  const completeAction = useUserActionCompletion();
 
   function commitSelected(next: Set<string>) {
     selectedRef.current = next;
@@ -193,6 +197,7 @@ export default function TranslationPage() {
     const token = requests.current.begin(glossaryId);
     const url = `/api/glossaries/${encodeURIComponent(glossaryId)}/terms`;
     const isCurrent = () => requests.current.isCurrent(token) && expandedRef.current.has(glossaryId);
+    const action = startUserAction("select_all");
     setGlossaryLoadState(glossaryId, { kind: "select-all" });
     setSelectionError("");
     setTermErrors((current) => ({ ...current, [glossaryId]: undefined }));
@@ -201,7 +206,7 @@ export default function TranslationPage() {
         (page, signal, version) => {
           const query = new URLSearchParams({ page: String(page) });
           if (version !== undefined) query.set("expectedVersion", version);
-          return api<TermPage>(`${url}?${query}`, { signal, cache: "no-store" });
+          return api<TermPage>(`${url}?${query}`, { signal, cache: "no-store", headers: action.headers() });
         },
         token.signal,
         {
@@ -210,20 +215,28 @@ export default function TranslationPage() {
           cachedPages,
           validateVersion: (version, signal) => api<{ termSetVersion: string }>(
             `${url}?${new URLSearchParams({ validateOnly: "true", expectedVersion: version })}`,
-            { signal, cache: "no-store" },
+            { signal, cache: "no-store", headers: action.headers() },
           ),
           isCurrent,
           getSelected: () => selectedRef.current,
           commit: commitSelected,
         },
       );
-      if (result.status === "stale" || !isCurrent()) return;
+      if (result.status === "stale" || !isCurrent()) {
+        completeAction(action, "cancelled");
+        return;
+      }
       if (result.selectionStatus === "limit-exceeded") {
         setSelectionError("この用語集をすべて選択すると、10,000件の上限を超えます。既存の選択は変更していません。");
       }
       commitTermPages(glossaryId, Object.fromEntries(result.pages.map((page) => [page.page, page])));
+      completeAction(action, result.selectionStatus === "limit-exceeded" ? "limit_exceeded" : "success");
     } catch (reason) {
-      if (!requests.current.isCurrent(token) || isAbortError(reason)) return;
+      if (!requests.current.isCurrent(token) || isAbortError(reason)) {
+        completeAction(action, "cancelled");
+        return;
+      }
+      completeAction(action, "error", { httpStatus: (reason as { status?: number }).status ?? 0 });
       // A failed operation must not leave an old complete collection labelled current.
       const next = { ...termPagesRef.current };
       delete next[glossaryId];
@@ -243,12 +256,14 @@ export default function TranslationPage() {
 
   async function translate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const action = startUserAction("translation", event.timeStamp);
     setBusy(true);
     setError("");
     setNotice("");
     try {
       const result = await api<{ translatedText: string }>("/api/translate", {
         method: "POST",
+        headers: action.headers(),
         body: JSON.stringify({
           originalText,
           sourceLanguage,
@@ -261,13 +276,16 @@ export default function TranslationPage() {
       setTranslatedText(result.translatedText);
       setConflicts([]);
       setNotice("翻訳が完了しました");
+      completeAction(action, "success", { httpStatus: 200 });
     } catch (reason) {
-      const typed = reason as Error & { conflicts?: TranslationConflict[] };
+      const typed = reason as Error & { conflicts?: TranslationConflict[]; status?: number };
       if (typed.conflicts) {
         setConflicts(typed.conflicts);
         setNotice("翻訳前に用語候補を一つずつ選択してください");
+        completeAction(action, "conflict", { httpStatus: typed.status });
       } else {
         setError(typed.message);
+        completeAction(action, "error", { httpStatus: typed.status ?? 0 });
       }
     } finally {
       setBusy(false);

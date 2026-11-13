@@ -21,19 +21,31 @@
     "test:db": "node --experimental-strip-types --test test/db-migration.test.ts",
     "test:usecases": "node --experimental-strip-types --test test/use-cases.test.ts",
     "test:browserless": "node --experimental-strip-types --test test/browserless.test.ts",
+    "test:observability": "node --experimental-strip-types --test test/observability.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api-logs": "^0.223.2",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.223.2",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.223.2",
+    "@opentelemetry/instrumentation": "^0.223.2",
+    "@opentelemetry/sdk-logs": "^0.223.2",
+    "@opentelemetry/sdk-metrics": "^2.12.1",
+    "@opentelemetry/sdk-trace-base": "^2.12.1",
+    "@vercel/otel": "^2.3.0",
     "next": "16.4.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "web-vitals": "^6.2.3"
   },
   "devDependencies": {
+    "@opentelemetry/context-async-hooks": "^2.12.1",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@playwright/test": "^1.64.1",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
     "postcss": "^8.5.31",

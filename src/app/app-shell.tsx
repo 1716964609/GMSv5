@@ -4,10 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { startWebVitalsReporting } from "@/lib/observability/web-vitals";
+
 export function AppShell({ children, title }: { children: ReactNode; title: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [authState, setAuthState] = useState<"checking" | "authorized" | "error">("checking");
+
+  useEffect(() => {
+    startWebVitalsReporting();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

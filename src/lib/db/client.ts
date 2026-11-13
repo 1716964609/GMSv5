@@ -1,10 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import { isTelemetryEnabled } from "../observability/config.ts";
+import { instrumentDatabase } from "../observability/sqlite.ts";
 import { runMigrations } from "./migrations.ts";
-import { openDatabase } from "./sqlite.ts";
+import { openDatabase, type DatabaseHandle } from "./sqlite.ts";
+
+function openApplicationDatabase(): DatabaseHandle {
+  const handle = openDatabase();
+  if (isTelemetryEnabled()) {
+    instrumentDatabase(handle.db);
+  }
+  return handle;
+}
 
 export function withDatabase<T>(callback: (db: DatabaseSync) => T): T {
-  const handle = openDatabase();
+  const handle = openApplicationDatabase();
 
   try {
     runMigrations(handle.db);
@@ -17,7 +27,7 @@ export function withDatabase<T>(callback: (db: DatabaseSync) => T): T {
 export async function withDatabaseAsync<T>(
   callback: (db: DatabaseSync) => Promise<T>,
 ): Promise<T> {
-  const handle = openDatabase();
+  const handle = openApplicationDatabase();
 
   try {
     runMigrations(handle.db);
