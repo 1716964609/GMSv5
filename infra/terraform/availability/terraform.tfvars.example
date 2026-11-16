@@ -1,0 +1,5 @@
+# Optional variables. Copy only non-secrets; .tfvars is ignored.
+# For eligible accounts seeking the provisioned-capacity allowance:
+# dynamodb_billing_mode = "PROVISIONED"
+# After a tested CloudWatch datasource connection from Grafana:
+# attach_grafana_read_policy = true

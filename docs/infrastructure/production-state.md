@@ -314,3 +314,7 @@ Application側の実装はHeader名に依存しない。`OTEL_EXPORTER_OTLP_HEAD
 3. 古い記録は削除しない。置き換えられた記述には「Superseded」と後継の場所を書く。
 4. 計画や希望は本書に書かない。[As-To-Be](../architecture-as-to-be-add-observability.md)に書く。
 5. Secret、Token、証明書の秘密鍵、`gmsv5.env`の内容は書かない。Parameter名とFile Pathまでとする。
+
+## Development note: 2026-11-17 — External availability monitor (NOT DEPLOYED)
+
+The independent `infra/terraform/availability/` module was deployed on 2026-11-17 JST. EventBridge, Lambda, DynamoDB and CloudWatch `GMS/Availability` are active. The Grafana CloudWatch datasource and three-panel availability dashboard have been verified using 45 real `HTTPUp` samples. Synthetic HTTP DOWN/RECOVERED and EC2 lifecycle tests passed. Real production EC2 event delivery, `StopToRecoverySeconds` from a real incident, reboot recovery and UptimeRobot remain unverified. See [As-Built](./availability-external-as-built-2026-11-17.md) and [Runbook](./availability-external-runbook.md).

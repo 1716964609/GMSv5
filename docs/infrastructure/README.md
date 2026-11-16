@@ -25,6 +25,8 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 | 文書 | 種別 | 状態（2026-11-16） |
 |---|---|---|
 | [production-state.md](./production-state.md) | 現在状態の要約 | **Current。最初に読む。** 実測・Terraform管理範囲・手動構築・未実装を分けて記載 |
+| [availability-external-runbook.md](./availability-external-runbook.md) | Runbook | EventBridge、Lambda、HTTP外部監視、Spot復旧確認 |
+| [availability-external-as-built-2026-11-17.md](./availability-external-as-built-2026-11-17.md) | 証跡（Availability） | AWS適用済み。Lambda・DynamoDB・CloudWatch・Discord・Grafanaの主要経路を検証済み |
 | [observability-as-built-2026-11-16.md](./observability-as-built-2026-11-16.md) | 証跡（監視 / SLO / 通知） | **最新。** Prometheus retention / 4パネル / Discord通知 / Rule評価、残課題を記録 |
 | [observability/translation-slo-alerting-runbook.md](./observability/translation-slo-alerting-runbook.md) | Runbook | SLO、診断、通知、Secret・復旧と未検証事項 |
 | [spot-interruption-runbook.md](./spot-interruption-runbook.md) | Runbook | Application / ObservabilityのSpot中断調査、復旧確認、Prometheus再起動安全策 |

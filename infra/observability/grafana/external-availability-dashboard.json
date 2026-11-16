@@ -1,0 +1,220 @@
+{
+  "uid": "gmsv5-external-availability",
+  "title": "GMS v5 | External Availability",
+  "tags": [
+    "gmsv5",
+    "availability",
+    "sre"
+  ],
+  "schemaVersion": 41,
+  "version": 0,
+  "refresh": "5m",
+  "timezone": "browser",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Public HTTP Status (last observed sample)",
+      "type": "stat",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "namespace": "GMS/Availability",
+          "metricName": "HTTPUp",
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "statistic": "Average",
+          "period": "60",
+          "region": "ap-northeast-1",
+          "matchExact": true,
+          "type": "timeSeriesQuery",
+          "label": "Public HTTP"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Public HTTP Availability \u2014 1-minute samples",
+      "description": "1=HTTP 200, 0=check failed. Missing samples are not proof of availability.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 18,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "namespace": "GMS/Availability",
+          "metricName": "HTTPUp",
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "statistic": "Average",
+          "period": "60",
+          "region": "ap-northeast-1",
+          "matchExact": true,
+          "type": "timeSeriesQuery",
+          "label": "Public HTTP"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "EC2 Stop-to-Recovery (event-time seconds)",
+      "description": "No data until a real EC2 incident is recorded. App recovery requires HTTP 200; Observability recovery currently means EC2 running only.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "namespace": "GMS/Availability",
+          "metricName": "StopToRecoverySeconds",
+          "dimensions": {
+            "Target": "i-0decf6bc205e273d9"
+          },
+          "statistic": "Average",
+          "period": "60",
+          "region": "ap-northeast-1",
+          "matchExact": true,
+          "type": "timeSeriesQuery",
+          "label": "Application"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "namespace": "GMS/Availability",
+          "metricName": "StopToRecoverySeconds",
+          "dimensions": {
+            "Target": "i-021170e56849c597b"
+          },
+          "statistic": "Average",
+          "period": "60",
+          "region": "ap-northeast-1",
+          "matchExact": true,
+          "type": "timeSeriesQuery",
+          "label": "Observability EC2"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

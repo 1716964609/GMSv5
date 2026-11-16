@@ -1,0 +1,13 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+lambda-package.zip
+.env
+.env.*
+*.pem
+*.key
+.venv/
+__pycache__/
+*.pyc
