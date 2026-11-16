@@ -138,3 +138,63 @@ A single existing GMS account can run modest, spaced-out translations to add dat
 Suggested measurement strata: short without terms, short with 1–2 terms, medium with terms, longer texts, and infrequent sequential repeats. Record local time, text length (not content), number of selected terms, success/failure, displayed outcome, and client-side perceived time (if manually measured) in a private test ledger. Do **not** attribute per-test values to Prometheus aggregate buckets without independent correlation evidence. Use only authorized testing on this own application, avoid large concurrency and deliberate API quota exhaustion.
 
 For a 7-day trial begun on Nov 16 JST, review on/after Nov 23 JST. Note 10d-or-1GiB retention is conditional on actual storage availability. Quantify Volume, Attainment, Success Rate, observed conditions and telemetry gaps; report insufficient samples as an inconclusive result, not PASS.
+
+## 8. Incident-specific Prometheus recovery procedure
+
+**Incident:** INC-20261116-PROM-RESTART
+
+### 8.1 Restart policy
+
+Prometheus was configured with `unless-stopped` before the incident.
+After it remained stopped following an EC2 restart, the operator
+changed the policy to `always`.
+
+Current verified setting: `Restart=always Status=running`.
+
+### 8.2 Safe configuration reload
+
+Avoid `docker kill --signal=HUP gms-prometheus` because of the
+observed manual-stop flag and a possible Docker signal-handling issue.
+
+Send SIGHUP directly to the running Prometheus process:
+
+~~~bash
+PID="$(sudo docker inspect -f '{{.State.Pid}}' gms-prometheus)"
+test "$PID" -gt 1 && sudo kill -HUP "$PID"
+~~~
+
+Verify configuration and readiness:
+
+~~~bash
+curl -fsS http://127.0.0.1:9090/api/v1/status/runtimeinfo
+
+sudo docker inspect gms-prometheus \
+  --format 'Restart={{.HostConfig.RestartPolicy.Name}} Status={{.State.Status}}'
+
+curl -fsS http://127.0.0.1:9090/-/ready
+~~~
+
+Expected: successful reload, `10d or 1GiB` retention,
+`Restart=always`, and Prometheus Ready.
+
+### 8.3 Recovery after unexpected shutdown
+
+1. Check `sudo docker ps -a` before modifying containers.
+2. Check the EC2 boot history and Docker journal.
+3. Check whether `gms-prometheus` is stopped.
+4. If stopped, preserve evidence and start the existing container.
+5. Verify Grafana-to-Prometheus readiness.
+6. Verify the four Prometheus scrape jobs.
+7. Check retention and the restart policy.
+8. Verify Grafana alert recovery and Discord notification.
+9. Record the incident timeline and any missing metrics.
+
+Do not remove or recreate Prometheus containers or volumes as an
+initial troubleshooting step.
+
+### 8.4 Limitations
+
+The manual recovery and new restart policy were verified on
+2026-11-16. Automatic restart after a subsequent EC2 reboot
+and complete recovery after Spot instance replacement
+have not been tested.

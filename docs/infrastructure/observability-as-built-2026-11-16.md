@@ -144,3 +144,77 @@ OperatorがGrafanaから次のExportを取得：Dashboard V2 JSON、Dashboard Cl
 | P2 | Trace privacy・Collector redaction | 本番のTrace値の検査、PII/Secret漏洩とログ露出の監査 |
 
 継続試験の評価期間を固定した場合、2026-11-16に開始した7日間は2026-11-23に満了する。**現時点の100%表示を7日間のSLO達成と誤読しないこと。** 詳細な操作手順は[Translation SLO Alerting Runbook](./observability/translation-slo-alerting-runbook.md)。
+
+## 9. Incident: Prometheus did not recover after EC2 restart (2026-11-16)
+
+**Incident ID:** INC-20261116-PROM-RESTART
+
+**Status:** Service restored; corrective configuration applied.
+Automatic recovery after a future host reboot remains unverified.
+
+### 9.1 Timeline (JST)
+
+| Time | Event |
+|---|---|
+| 18:10:20 | CloudTrail recorded `StopInstances` |
+| 18:10:23 | Prometheus received SIGTERM and exited normally |
+| 18:12:28 | CloudTrail recorded `StartInstances` |
+| 18:12:34 | New EC2 boot began |
+| Approximately 18:27 | Grafana delivered `DatasourceError` to Discord |
+| Approximately 18:35 | Operator manually started Prometheus |
+| 18:48:08 | Prometheus configuration successfully reloaded |
+
+### 9.2 Impact and evidence
+
+- Prometheus remained stopped after the EC2 host restarted.
+- Grafana could not resolve `gms-prometheus` through Docker DNS.
+- Grafana generated a `DatasourceError` notification.
+- Prometheus exit code was `0`; `OOMKilled=false`.
+- Docker logs recorded `hasBeenManuallyStopped=true`
+  for Prometheus and `false` for the other monitored containers.
+- The preceding restart policy was `unless-stopped`.
+- After manual recovery, Grafana connectivity and all four
+  Prometheus scrape jobs were verified healthy.
+- Metrics collected during the outage may be missing.
+
+### 9.3 Root cause assessment
+
+The immediate cause was Prometheus failing to restart automatically
+after the EC2 stop/start cycle.
+
+A strong contributing-cause hypothesis is the earlier use of
+`docker kill --signal=HUP gms-prometheus`, which may have affected
+Docker's manual-stop tracking under `unless-stopped`.
+
+This hypothesis is supported by the observed Docker state,
+but an isolated reproduction test has not been performed.
+
+CloudTrail confirms EC2 lifecycle operations involving
+`InstanceTermination` and `InstanceLaunch` identities.
+The underlying AWS reason for those operations is not yet established.
+
+### 9.4 Recovery and remediation
+
+- Started the existing Prometheus container with `docker start`.
+- Verified Grafana-to-Prometheus readiness.
+- Verified all four scrape jobs returned `UP=1`.
+- Updated Prometheus restart policy to `always`.
+- Replaced Docker-mediated HUP with direct host-PID SIGHUP.
+- Confirmed `reloadConfigSuccess=true`.
+- Confirmed `lastConfigTime=2026-11-16T09:48:08Z`.
+- Confirmed effective retention `10d or 1GiB`.
+- Confirmed Prometheus remained `running` and `Ready`.
+
+This later observation supersedes the earlier
+`unless-stopped` status in Section 2 for Prometheus only.
+It also confirms retention persistence across restarting the
+existing container, but not across container recreation.
+
+### 9.5 Follow-up
+
+- Verify automatic recovery after a future controlled host reboot.
+- Verify the Grafana `DatasourceError` Resolved notification.
+- Quantify the metrics collection gap.
+- Check whether CloudTrail events correspond to Spot lifecycle actions.
+- Preserve the restart policy and startup definition in infrastructure code.
+- Test recovery from EC2 replacement separately from EC2 restart.
