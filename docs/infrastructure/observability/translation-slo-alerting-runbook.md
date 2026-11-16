@@ -198,3 +198,19 @@ The manual recovery and new restart policy were verified on
 2026-11-16. Automatic restart after a subsequent EC2 reboot
 and complete recovery after Spot instance replacement
 have not been tested.
+
+## 9. Spot interruption incident and recovery reference
+
+On 2026-11-16 the AWS Spot service stopped and restarted
+the Production Application EC2 three times. The Observability EC2
+also experienced a stop/start cycle.
+
+Prometheus failed to recover automatically, causing a genuine
+Grafana `DatasourceError` notification to Discord.
+Manual recovery succeeded; Prometheus restart policy is now
+`always`. A future automatic reboot recovery test remains pending.
+
+For the complete timeline, assessment, EC2 inspection and
+recovery commands, use the
+[Spot Interruption and Recovery Runbook](../spot-interruption-runbook.md)
+and [As-Built Section 10](../observability-as-built-2026-11-16.md).

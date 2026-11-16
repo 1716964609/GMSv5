@@ -27,6 +27,7 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 | [production-state.md](./production-state.md) | 現在状態の要約 | **Current。最初に読む。** 実測・Terraform管理範囲・手動構築・未実装を分けて記載 |
 | [observability-as-built-2026-11-16.md](./observability-as-built-2026-11-16.md) | 証跡（監視 / SLO / 通知） | **最新。** Prometheus retention / 4パネル / Discord通知 / Rule評価、残課題を記録 |
 | [observability/translation-slo-alerting-runbook.md](./observability/translation-slo-alerting-runbook.md) | Runbook | SLO、診断、通知、Secret・復旧と未検証事項 |
+| [spot-interruption-runbook.md](./spot-interruption-runbook.md) | Runbook | Application / ObservabilityのSpot中断調査、復旧確認、Prometheus再起動安全策 |
 | [observability-as-built-2026-11-13.md](./observability-as-built-2026-11-13.md) | 証跡（監視基盤） | §12が最新（2026-11-14）。§11は2026-11-13夜の記録で、「未完了」とした項目の一部を§12が置き換える。§1〜§10は初期構築時のSnapshot |
 | [production-as-built-2026-11-08.md](./production-as-built-2026-11-08.md) | 証跡（Production） | Historical。Baseline 1.2（Release `9783463`）の記録。「Current release」の記載はSuperseded |
 | [production-as-built-2026-10-26.md](./production-as-built-2026-10-26.md) | 証跡（Production） | Historical。初期構築とDeepL Egress修正の記録。Ingress、TLS、Nginx、Runtimeについては今もこれが最新の証跡 |

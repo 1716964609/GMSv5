@@ -215,6 +215,165 @@ existing container, but not across container recreation.
 - Verify automatic recovery after a future controlled host reboot.
 - Verify the Grafana `DatasourceError` Resolved notification.
 - Quantify the metrics collection gap.
-- Check whether CloudTrail events correspond to Spot lifecycle actions.
+- Spot lifecycle actor confirmed for Application; see Section 10 for investigation evidence and remaining uncertainties.
 - Preserve the restart policy and startup definition in infrastructure code.
 - Test recovery from EC2 replacement separately from EC2 restart.
+
+## 10. Spot lifecycle investigation and incident closure (2026-11-16)
+
+**Reference:** INC-20261116-PROM-RESTART
+**Investigation status:** Completed with an unresolved AWS internal trigger.
+**Service restoration:** Verified.
+**Long-term availability and disaster recovery:** Not yet verified.
+
+### 10.1 Infrastructure and capacity pool
+
+| Field | Application | Observability |
+|---|---|---|
+| Instance | `i-0decf6bc205e273d9` | `i-021170e56849c597b` |
+| Spot Request | `sir-rmf7nbph` | `sir-r4gr2zqj` |
+| Region / AZ | `ap-northeast-1a` | `ap-northeast-1a` |
+| Type | `t4g.small` | `t4g.small` |
+| Request type | Persistent | Persistent |
+| Interruption behavior | Stop | Stop |
+| Current request status at investigation | Active / fulfilled | Active / fulfilled |
+
+Both instances belong to the same Spot capacity pool:
+`ap-northeast-1a` + `t4g.small`.
+
+The Spot Request API returned a SpotPrice field of
+`0.021600 USD/hour` for both requests. This field must not be
+interpreted as a user-configured maximum without examining the
+request and Terraform configuration. The Terraform instance
+definitions did not explicitly set a maximum Spot price.
+
+### 10.2 CloudTrail lifecycle events
+
+All timestamps below are Japan Standard Time (JST).
+
+| Instance | StopInstances (running to stopping) | StartInstances | API event interval |
+|---|---|---|---|
+| Application #1 | 11:49:38 | 11:50:44 | 66 seconds |
+| Application #2 | 13:36:25 | 13:41:45 | 320 seconds |
+| Application #3 | 15:04:47 | 15:06:26 | 99 seconds |
+| Observability | 18:10:20 | 18:12:28 | 128 seconds |
+
+These are **CloudTrail event-to-event intervals**, not proven
+end-user downtime or exact service-unavailability durations.
+
+For the Application instance, the paired StopInstances calls
+approximately 60 seconds apart did not represent two separate
+interruptions. The second response reported
+`previousState=stopped`, `currentState=stopped`.
+
+All three Application stop/start cycles were initiated through
+`spot.amazonaws.com`:
+- CloudTrail `userIdentity.type=AssumedRole`
+- `invokedBy=spot.amazonaws.com`
+- `userAgent=spot.amazonaws.com`
+- `sourceIPAddress=spot.amazonaws.com`
+- `errorCode` absent
+
+Stop requests used `force=false` and `skipOsShutdown=false`.
+The OS reboot/shutdown history independently confirmed the
+Application stop/start cycles.
+
+For Observability, CloudTrail recorded lifecycle operations by
+the `InstanceTermination` / `InstanceLaunch` identities, and
+the OS journal confirmed an orderly shutdown at 18:10 JST.
+The detailed `invokedBy` field for that instance was not
+separately captured in this investigation.
+
+### 10.3 Pricing and root-cause assessment
+
+The queried Spot price history for `ap-northeast-1a`,
+`t4g.small`, Linux/UNIX returned **0.008000 USD/hour**
+at both 2026-11-15 20:00 UTC and 2026-11-16 04:00 UTC.
+No Spot price increase was observed in the investigated period.
+
+**Confirmed:** The Application EC2 stop/start operations were
+initiated by AWS Spot service rather than a normal user action.
+
+**Most likely explanation:** EC2 reclaimed spare capacity for
+its capacity management needs. Increased On-Demand demand can
+produce this behavior, but this customer's exact interruption
+trigger was not identified.
+
+**Not proven:** A specific On-Demand customer displaced these
+instances; a specific capacity shortage or host maintenance
+event caused each interruption.
+
+Other AWS-managed causes, including host maintenance or hardware
+decommissioning, cannot be excluded from the collected evidence.
+
+Both Spot Requests had already returned to `fulfilled`.
+Historical intermediate status codes such as
+`instance-stopped-no-capacity` were not captured.
+EventBridge Archive listing returned no archives, so
+historical interruption warnings could not be retrieved.
+
+### 10.4 Application recovery evidence
+
+After the third interruption:
+- EC2 OS boot: 2026-11-16 15:06:35 JST.
+- `gmsv5.service` ActiveEnterTimestamp:
+  2026-11-16 15:06:40 JST.
+- `ActiveState=active`, `SubState=running`, `NRestarts=0`.
+- `curl http://127.0.0.1:3000/` returned HTTP 200.
+
+This verifies automatic systemd startup and subsequent
+local HTTP readiness **after the final EC2 restart**.
+Continuous external availability and readiness after each
+earlier interruption were not measured.
+
+The Application is a single Spot instance. During an interruption,
+user-visible availability cannot be guaranteed.
+
+### 10.5 Observability incident and remediation
+
+- EC2 shutdown at approximately 18:10 JST.
+- Prometheus received SIGTERM and exited with code 0.
+- `OOMKilled=false`.
+- Host boot began at 18:12:34 JST.
+- Other observability containers restarted; Prometheus did not.
+- Docker journal recorded `hasBeenManuallyStopped=true`
+  for Prometheus, while the other examined containers were false.
+- Grafana failed to resolve `gms-prometheus` via Docker DNS.
+- Grafana generated a `DatasourceError` notification delivered
+  to Discord at approximately 18:27 JST.
+- Operator started the existing Prometheus container manually.
+- Readiness and all four scrape jobs were verified healthy.
+- Restart policy changed from `unless-stopped` to `always`.
+- Configuration reloaded via direct host-PID SIGHUP.
+- `reloadConfigSuccess=true`, with last reload
+  `2026-11-16T09:48:08Z`.
+- Effective retention remained `10d or 1GiB`.
+
+Earlier `docker kill --signal=HUP` may have contributed to
+Docker's manual-stop state. This remains a strong hypothesis,
+not a fully reproduced or independently proven cause.
+
+Automatic restoration with the new `always` policy after
+a subsequent host restart is not yet verified.
+
+### 10.6 Final assessment
+
+**Incident operationally restored:** Application local HTTP 200;
+Prometheus Ready; Grafana-to-Prometheus connectivity working;
+all four scrape targets UP.
+
+**RCA conclusion:** AWS Spot lifecycle interruption is confirmed
+for the Application instance. Capacity reclamation is the leading
+explanation, while the exact AWS internal trigger is unknown.
+The Observability outage was prolonged by Prometheus not
+automatically recovering under its former restart policy.
+
+**Remaining risks:** The metrics collection gap is not quantified.
+Grafana `DatasourceError` Resolved notification has not been
+confirmed. The seven-day SLO remains unproven, and outages during
+Spot interruptions are not covered by the success-only latency SLI.
+
+This operational closure does not establish an availability SLO
+or validated disaster recovery.
+
+**Operational procedure:** [Spot Interruption Runbook](./spot-interruption-runbook.md).

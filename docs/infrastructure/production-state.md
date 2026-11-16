@@ -19,6 +19,23 @@
 - **未達:** 7日連続のSLO適合実績、実翻訳遅延による発火、失敗率・監視基盤停止の独立アラート、Spot再作成時の復元、完全なバックアップ。
 - **追加構成:** `infra/terraform/discord-alert-egress/`（専用CloudFront、Function、KVS、Origin Request Policy、Local State）、EC2上`gms-discord-egress`（Nginx host networking、手動起動）。KVSの値とNginxのSecret設定はGit管理しない。Grafana Dashboard / Alert Rule / Contact PointのExportを`infra/observability/grafana/`に保存。
 
+### Incident update: 2026-11-16 — Spot interruptions
+
+**実測:** Application EC2は11:49、13:36、15:04 JSTに
+AWS Spotサービスによる停止・起動を経験（3回）。
+最終起動後の`gmsv5.service`は自動起動しHTTP 200を返した。
+Observability EC2も18:10～18:12 JSTに停止・起動。
+Prometheusのみ自動復帰せず、Grafanaが`DatasourceError`をDiscordへ通知。
+既存コンテナを手動復旧し、Restart Policyを`always`へ変更した。
+
+**原因評価:** 両EC2は同じ`ap-northeast-1a / t4g.small`容量プール。
+Spot価格履歴は0.008 USD/hで価格上昇なし。
+AWSによる容量回収が最有力だが、特定のOn-Demand需要・
+内部停止理由は未確認。サービス停止時間と欠測量は未測定。
+
+**運用:** [Spot Interruption Runbook](./spot-interruption-runbook.md)。
+自動再起動の実地再検証、Spot再作成からの復元、外部死活監視は未完了。
+
 ---
 
 ## 1. 要約
@@ -134,7 +151,7 @@ EC2 #2：`i-021170e56849c597b`、`t4g.small`、Amazon Linux 2023 ARM64、Root EB
 | `gms-node` | `prom/node-exporter:v1.12.1` | 128 MiB | 7.438 MiB（2026-11-13の値。11-14の記録なし） |
 
 - Root Filesystem：41%使用、空き5.9 GiB。System MemAvailable：約1.0 GiB。Swapなし（As-Built §12）。
-- 保存期間の実効値：Prometheusは**10日または1GiB**（2026-11-16、[As-Built](./observability-as-built-2026-11-16.md)）。元のコンテナ起動引数は3日/512MBのままで、再起動後の維持は未検証。Tempoは24時間（過去のAs-Built）。これらはRoot Filesystem全体の使用量上限を保証しない。
+- 保存期間の実効値：Prometheusは**10日または1GiB**（2026-11-16、[As-Built](./observability-as-built-2026-11-16.md)）。元のコンテナ起動引数は3日/512MBのまま。EC2再起動後に既存コンテナを手動起動し10d/1GiB維持を確認。コンテナ再作成後の保持は未検証。Tempoは24時間（過去のAs-Built）。これらはRoot Filesystem全体の使用量上限を保証しない。
 - Metrics・Traces・Grafanaの状態はすべて同じRoot EBS上にある。Root EBSは`delete_on_termination = true`で、Backupの記録はない。
 
 いずれも一時点の値であり、容量予測や長期安定性の検証ではない。
@@ -243,7 +260,7 @@ Production側も同様で、TerraformはEC2・ENI・EBS・IAM・S3・DeepL用Clo
 | Edge監視 | CloudFront Server-Timing、Nginx Timing Log、DNS / HTTPSのSynthetic Probeは未実装 | As-Built §8、§12 |
 | Alerting | **更新済み（2026-11-16）：** Grafana-managed Rule、Discord Contact Point、Firing/Resolved通知を実証。失敗率・Telemetry停止の別Alertは未実装 | [As-Built 2026-11-16](./observability-as-built-2026-11-16.md) |
 | SLI / SLO | **更新済み（2026-11-16）：** 成功したサーバー翻訳95%以上が10秒以内 / rolling 7d。Pilot Rule・Dashboard実装済み。7日間達成の確証は未取得 | [As-Built 2026-11-16](./observability-as-built-2026-11-16.md) |
-| 自動復旧 | Spot中断後の復旧、ENI / EBSの再接続、監視基盤の再構築は自動化していない | As-Built §2.1、§11.6、§12 |
+| 自動復旧 | 2026-11-16にApplicationのSpot停止・起動3回を確認。最終起動後のsystemd自動起動とHTTP 200は実測。ObservabilityではPrometheusのみ手動復旧し、Restart Policyを`always`へ変更。今後の自動復旧、インスタンス再作成、ENI/EBS復元は未検証 | As-Built §2.1、§11.6、§12 |
 | 証明書とSecretのRotation | Gateway証明書の更新、Token Rotationは手動。Server証明書は発行時90日で、発行が2026-11-13前後なら2027年2月中旬に期限を迎える（正確な期限は証明書で確認すること）。失効するとTelemetryの送信が止まる | As-Built §11.3、§11.6 |
 | Production Host監視 | EC2 #1のNode Exporterなどは未導入 | As-Built §8、§12 |
 | 監視データのBackup | Prometheus、Tempo、GrafanaのBackupと復元手順は無い | As-Built §7、§11.1 |
@@ -261,7 +278,7 @@ Production側も同様で、TerraformはEC2・ENI・EBS・IAM・S3・DeepL用Clo
 | 計測オーバーヘッド | Telemetry有効化前後の応答時間・CPU・Memoryの比較は記録が無い |
 | Sampling Rate | 本番の設定値は記録が無い。Applicationの既定は`parentbased_always_on` |
 | Tempoの長期容量 | 長時間運用、Disk枯渇時の挙動は未試験（As-Built §11.6） |
-| Spot中断時の挙動 | 両EC2とも中断時Stopの設定。実際の中断と再開は未経験（As-Built §2） |
+| Spot中断時の挙動 | 2026-11-16、Applicationで3回、Observabilityで1回のStop/Startサイクルを確認。Applicationの操作主体は`spot.amazonaws.com`。正確なAWS内部の中断原因は未確認。[As-Built §10](./observability-as-built-2026-11-16.md)、[Spot Runbook](./spot-interruption-runbook.md) |
 | Grafana Dashboardの保存 | Save後の永続化は独立に確認していない（As-Built §4.3） |
 | Terraformと実環境の差分 | 両Stackとも`terraform plan`による無差分確認の記録が無い |
 | `364d0b7`切替の実行記録 | Readiness 200と起動成功は記録済み。SSM Command ID、systemdの最終出力、切替先Pathは未記録 |
