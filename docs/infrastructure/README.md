@@ -2,7 +2,7 @@
 
 - **Owner:** Infrastructure / SRE（Platform Engineering）
 - **対象コード:** [`infra/`](../../infra/)
-- **基準日:** 2026-11-14（JST）
+- **基準日:** 2026-11-16（JST）
 - **上位の案内:** [docs/README.md](../README.md)
 
 このディレクトリは、GMS v5を動かす基盤の**実際の状態**と、その証跡を置く場所である。Applicationの仕様・設計・Telemetry Schemaは[Development文書](../development/README.md)にある。
@@ -22,9 +22,11 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 
 ## 2. 文書の一覧と状態
 
-| 文書 | 種別 | 状態（2026-11-14） |
+| 文書 | 種別 | 状態（2026-11-16） |
 |---|---|---|
 | [production-state.md](./production-state.md) | 現在状態の要約 | **Current。最初に読む。** 実測・Terraform管理範囲・手動構築・未実装を分けて記載 |
+| [observability-as-built-2026-11-16.md](./observability-as-built-2026-11-16.md) | 証跡（監視 / SLO / 通知） | **最新。** Prometheus retention / 4パネル / Discord通知 / Rule評価、残課題を記録 |
+| [observability/translation-slo-alerting-runbook.md](./observability/translation-slo-alerting-runbook.md) | Runbook | SLO、診断、通知、Secret・復旧と未検証事項 |
 | [observability-as-built-2026-11-13.md](./observability-as-built-2026-11-13.md) | 証跡（監視基盤） | §12が最新（2026-11-14）。§11は2026-11-13夜の記録で、「未完了」とした項目の一部を§12が置き換える。§1〜§10は初期構築時のSnapshot |
 | [production-as-built-2026-11-08.md](./production-as-built-2026-11-08.md) | 証跡（Production） | Historical。Baseline 1.2（Release `9783463`）の記録。「Current release」の記載はSuperseded |
 | [production-as-built-2026-10-26.md](./production-as-built-2026-10-26.md) | 証跡（Production） | Historical。初期構築とDeepL Egress修正の記録。Ingress、TLS、Nginx、Runtimeについては今もこれが最新の証跡 |
@@ -40,11 +42,14 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 |---|---|
 | [`infra/terraform/v5/`](../../infra/terraform/v5/) | Production：EC2、ENI、EBS、IAM、Release用S3、DeepL用CloudFront、Cognito |
 | [`infra/terraform/observability/`](../../infra/terraform/observability/) | Observability EC2：EC2、Security Group、IAM |
+| [`infra/terraform/discord-alert-egress/`](../../infra/terraform/discord-alert-egress/) | Discord通知専用CloudFront、Function、KVS、Origin Request Policy |
+| [`infra/observability/grafana/`](../../infra/observability/grafana/) | Grafana Dashboard / Alert Rule / Contact Pointの機密検査後のExport |
+| [`infra/observability/discord-relay/`](../../infra/observability/discord-relay/) | Nginx Relayの**Secretなし**再構築テンプレート |
 
 各ディレクトリが何を宣言し、何を宣言していないかは[production-state.md §4〜§5](./production-state.md#4-terraformの管理範囲宣言)にまとめた。要点は次のとおり。
 
-- 2つは独立したRoot Moduleで、Stateはローカルファイルである。StateとPlanはGit管理外で、Secretを含み得る。
-- ホスト上の構成（Docker、Container、Nginx、systemd、証明書、Collector / Tempo / Prometheus / Grafanaの設定）はリポジトリに無い。As-Built記録の記述だけが手がかりである。
+- `v5`、`observability`、`discord-alert-egress`はそれぞれ独立したRoot Moduleで、Stateはローカルファイルである。StateとPlanはGit管理外で、Secretを含み得る。
+- ホスト上の実設定（Docker、Container、Nginx、systemd、証明書、Collector / Tempo / Prometheus / Grafana）は未収録。Discord RelayのRedacted TemplateとGrafanaのExportは2026-11-16に追加したが、**実際のSecret入り設定・再構築の完全自動化は存在しない**。
 
 ## 4. 記録のルール
 

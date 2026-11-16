@@ -1,0 +1,32 @@
+# REDACTED RECONSTRUCTION TEMPLATE; NOT the deployed configuration.
+# Inject secrets using a root-only deployment process. Never commit the rendered file.
+# Configure a stable, known Grafana container address or update this ACL after recreations.
+server {
+    listen 172.18.0.1:18081;
+    server_tokens off;
+    access_log off;
+    client_max_body_size 64k;
+
+    location = /notify {
+        allow __GRAFANA_IPV4__;
+        deny all;
+        if ($request_method != POST) { return 405; }
+
+        resolver 10.0.0.2 ipv4=off valid=60s;
+        set $edge d17p4dgtsvz5w4.cloudfront.net;
+        proxy_pass https://$edge/notify;
+        proxy_http_version 1.1;
+        proxy_set_header Host $edge;
+        proxy_set_header X-GMS-Notify-Token "__RELAY_TOKEN_SECRET__";
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_ssl_server_name on;
+        proxy_ssl_name $edge;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 20s;
+    }
+    location / { return 404; }
+}

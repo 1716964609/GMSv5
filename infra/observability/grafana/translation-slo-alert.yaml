@@ -1,0 +1,93 @@
+apiVersion: 1
+groups:
+    - orgId: 1
+      name: gms-slo-5m
+      folder: GMS v5
+      interval: 5m
+      rules:
+        - uid: ag4gfkd22l0jkf
+          title: GMS Translation SLO Breach — Rolling 7d
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 600
+                to: 0
+              datasourceUid: prometheus
+              model:
+                editorMode: code
+                expr: |4
+
+                    (
+                      (
+                        100 *
+                        (
+                          sum(increase(
+                            gms_translation_duration_seconds_bucket{
+                              gms_translation_outcome="success",
+                              le="10.0"
+                            }[7d]
+                          )) or vector(0)
+                        )
+                        /
+                        clamp_min(
+                          (
+                            sum(increase(
+                              gms_translation_duration_seconds_count{
+                                gms_translation_outcome="success"
+                              }[7d]
+                            )) or vector(0)
+                          ),
+                          1
+                        )
+                        < bool 95
+                      )
+                      *
+                      (
+                        (
+                          sum(increase(
+                            gms_translation_duration_seconds_count{
+                              gms_translation_outcome="success"
+                            }[7d]
+                          )) or vector(0)
+                        ) >= bool 20
+                      )
+                    )
+                instant: true
+                intervalMs: 1000
+                legendFormat: __auto
+                maxDataPoints: 43200
+                range: false
+                refId: A
+            - refId: C
+              queryType: expression
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0.5
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                            - C
+                      reducer:
+                        params: []
+                        type: last
+                      type: query
+                datasource:
+                    type: __expr__
+                    uid: __expr__
+                expression: A
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: C
+                type: threshold
+          noDataState: NoData
+          execErrState: Error
+          for: 10m
+          isPaused: false
+          notification_settings:
+            receiver: GMS SRE Discord Alerts

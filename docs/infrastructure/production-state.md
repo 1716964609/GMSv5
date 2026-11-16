@@ -1,12 +1,25 @@
 # GMS v5 — Production State（現在の本番状態）
 
-- **基準日:** 2026-11-14（JST）
+- **基準日:** 2026-11-16（JST）
 - **文書種別:** Current State Summary（一次証跡への索引。本書自体は証跡ではない）
 - **Owner:** Infrastructure / SRE
 - **対象:** Production EC2 #1（Application）とObservability EC2 #2（監視基盤）
 - **入口:** [Infrastructure README](./README.md)、[文書全体の案内](../README.md)
 
 > **Evidence policy:** 本書は、日付付きAs-Built記録、Gitで追跡しているTerraform・Workflow定義、GitHub Actionsの読み取り結果を要約したものである。本書の作成にあたり、AWS・EC2・本番DB・systemd・Secretへの照会や変更は行っていない。本書と一次証跡が食い違う場合は**一次証跡を正**とし、本書を修正する。
+
+## Update: 2026-11-16 — Rolling 7d SLO and Discord Alerting
+
+この更新は、下の旧い2026-11-14時点の記述に優先する。**一次証跡:** [Observability / SLO / Discord As-Built 2026-11-16](./observability-as-built-2026-11-16.md)。**運用:** [SLO Alerting Runbook](./observability/translation-slo-alerting-runbook.md)。
+
+- **実測:** Prometheus retentionのreload後実効値は10dまたは1GiB、Scrape 4/4 UP。Dockerの元起動引数3d/512MBは更新されておらず再作成後の保持は未確認。
+- **実測:** 翻訳Histogram / 成功CountをPrometheusで確認。実翻訳2件、7d増分約1件。DashboardにはSLO Attainment、p95 Latency、成功翻訳数、Success Rateの4パネル。
+- **実測:** 監視EC2のDocker bridge IPv4 → Host-Network Nginx → IPv6 HTTPS CloudFront → IPv4 Discord Webhook。POST 204、Discord着信、Grafana-managed AlertのFiring / Resolvedまで確認。
+- **実測:** 正式`GMS Translation SLO Breach — Rolling 7d` は5分評価、10分Pending、20成功件以上かつ10秒以内割合95%未満で発火、少数標本時はNormal。作成後の定期評価を確認。
+- **未達:** 7日連続のSLO適合実績、実翻訳遅延による発火、失敗率・監視基盤停止の独立アラート、Spot再作成時の復元、完全なバックアップ。
+- **追加構成:** `infra/terraform/discord-alert-egress/`（専用CloudFront、Function、KVS、Origin Request Policy、Local State）、EC2上`gms-discord-egress`（Nginx host networking、手動起動）。KVSの値とNginxのSecret設定はGit管理しない。Grafana Dashboard / Alert Rule / Contact PointのExportを`infra/observability/grafana/`に保存。
+
+---
 
 ## 1. 要約
 
@@ -16,7 +29,8 @@
 | Server Traces / Metrics | 本番で有効。実リクエストのTraceとMetricsを確認済み | 実測 |
 | 監視基盤 | OTLP Gateway、OTel Collector、Tempo、Prometheus、Grafanaが稼働。Prometheus Targets 4/4 UP | 実測 |
 | Browser RUM | コードはあるが本番では無効 | 実測（無効であること） |
-| Logs集中管理、Edge監視、Alerting、SLO、自動復旧 | 未完成 | 未実装 |
+| Rolling 7-Day SLO Dashboard / Alerting | 4パネル・95%/10s（成功翻訳）・Grafana-managed Rule・Discord通知を初期構築。7d実績判定は未実施 | 実測（2026-11-16） |
+| Logs集中管理、Edge監視、自動復旧、Telemetry欠損監視 | 未完成 | 未実装 |
 | 監視InfrastructureのTerraform再現性 | 部分的。EC2・Security Group・IAMまで。Tempo・Gatewayなどホスト上の構成は手動 | 宣言＋手動 |
 
 Phase 1が確認したのは、本番Applicationの計装・送信・保存・検索ができることである。本番Observabilityの運用成熟（検知・通知・復旧）を確立したものではない（[Observability As-Built §12](./observability-as-built-2026-11-13.md#12-production-phase-1-acceptance)）。
@@ -59,7 +73,7 @@ flowchart LR
         GW["gms-otlp-gateway<br/>Nginx / IPv6 TCP 8443<br/>TLS + X-OTLP-Token"]
         COL["gms-otel<br/>OTel Collector :4318"]
         TEMPO["gms-tempo<br/>Traces / 24h"]
-        PROM["gms-prometheus<br/>Metrics / 3d, 512MB"]
+        PROM["gms-prometheus<br/>Metrics / 10d or 1GiB (11/16)"]
         GRAF["gms-grafana"]
         NODE["gms-node<br/>Node Exporter"]
         GW --> COL
@@ -120,7 +134,7 @@ EC2 #2：`i-021170e56849c597b`、`t4g.small`、Amazon Linux 2023 ARM64、Root EB
 | `gms-node` | `prom/node-exporter:v1.12.1` | 128 MiB | 7.438 MiB（2026-11-13の値。11-14の記録なし） |
 
 - Root Filesystem：41%使用、空き5.9 GiB。System MemAvailable：約1.0 GiB。Swapなし（As-Built §12）。
-- 保存期間の設定値：Prometheusは3日または512MB、Tempoは24時間（As-Built §4.2、§11.1）。どちらもRoot Filesystem全体の使用量を厳密に制限するものではない。
+- 保存期間の実効値：Prometheusは**10日または1GiB**（2026-11-16、[As-Built](./observability-as-built-2026-11-16.md)）。元のコンテナ起動引数は3日/512MBのままで、再起動後の維持は未検証。Tempoは24時間（過去のAs-Built）。これらはRoot Filesystem全体の使用量上限を保証しない。
 - Metrics・Traces・Grafanaの状態はすべて同じRoot EBS上にある。Root EBSは`delete_on_termination = true`で、Backupの記録はない。
 
 いずれも一時点の値であり、容量予測や長期安定性の検証ではない。
@@ -165,7 +179,7 @@ EC2 #2：`i-021170e56849c597b`、`t4g.small`、Amazon Linux 2023 ARM64、Root EB
 
 ### 4.3 Terraformの運用上の事実
 
-- 2つのディレクトリは独立したRoot Moduleで、Stateも別である。
+- 現在は3つの独立したRoot Module（`v5`、`observability`、`discord-alert-egress`）で、Stateも各ディレクトリに分離する。Discord専用Root Moduleは2026-11-16に追加され、CloudFront Function / KVSの**値は手動投入**。
 - どちらにも`backend`の宣言が無く、Stateはローカルファイルである。`*.tfstate*`と`*.tfplan`はGit管理外で、共有・Lockの仕組みは無い。
 - `cognito-secret.tf`はClient Secretを資源の値として扱うため、StateにSecretが含まれる。Stateをリポジトリや文書に入れてはならない。
 - Subnet ID、Production EC2のIPv6アドレスはリテラルで書かれている。2つのStackの間にRemote Stateなどの参照は無い。
@@ -227,8 +241,8 @@ Production側も同様で、TerraformはEC2・ENI・EBS・IAM・S3・DeepL用Clo
 | Browser RUM、Web Vitals | コードとServer側の受信処理はある。本番では無効（As-Built §12）。Build Workflowに`NEXT_PUBLIC_GMS_RUM_ENABLED`が無いため、本番ArtifactのBrowser側は送信しない。Sampling / Privacy方針（OD-10）は未承認 | As-Built §12、[Telemetry Schema](../development/observability/application-instrumentation.md) |
 | Logs集中管理 | Lokiなどは未導入。ApplicationとNginxのLogは各ホスト上のみ | As-Built §8、§12 |
 | Edge監視 | CloudFront Server-Timing、Nginx Timing Log、DNS / HTTPSのSynthetic Probeは未実装 | As-Built §8、§12 |
-| Alerting | Alertmanager、Alert Rule、通知先は未設定 | As-Built §8、§12 |
-| SLI / SLO | 候補のみ。目標値とError Budgetは未定義 | As-Built §12、[As-To-Be §8](../architecture-as-to-be-add-observability.md) |
+| Alerting | **更新済み（2026-11-16）：** Grafana-managed Rule、Discord Contact Point、Firing/Resolved通知を実証。失敗率・Telemetry停止の別Alertは未実装 | [As-Built 2026-11-16](./observability-as-built-2026-11-16.md) |
+| SLI / SLO | **更新済み（2026-11-16）：** 成功したサーバー翻訳95%以上が10秒以内 / rolling 7d。Pilot Rule・Dashboard実装済み。7日間達成の確証は未取得 | [As-Built 2026-11-16](./observability-as-built-2026-11-16.md) |
 | 自動復旧 | Spot中断後の復旧、ENI / EBSの再接続、監視基盤の再構築は自動化していない | As-Built §2.1、§11.6、§12 |
 | 証明書とSecretのRotation | Gateway証明書の更新、Token Rotationは手動。Server証明書は発行時90日で、発行が2026-11-13前後なら2027年2月中旬に期限を迎える（正確な期限は証明書で確認すること）。失効するとTelemetryの送信が止まる | As-Built §11.3、§11.6 |
 | Production Host監視 | EC2 #1のNode Exporterなどは未導入 | As-Built §8、§12 |

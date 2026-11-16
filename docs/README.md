@@ -1,14 +1,14 @@
 # GMS v5 — Documentation Map / Source of Truth
 
-- **基準日:** 2026-11-14（JST）
+- **基準日:** 2026-11-16（JST）
 - **対象Branch:** `feat/gmsv5-otel`
 - **文書種別:** 文書全体の案内。何がSource of Truthで、誰が責任を持ち、どの順に読むかを定める
 
 GMS v5は1つのRepository（Monorepo）で開発している。本書は、その中の**Development**（Application）と**Infrastructure**（AWS・ホスト・監視基盤）の責任範囲を分け、将来Infrastructureを別Repositoryへ移せる形に文書を整理する。
 
-> 本書は案内であり、証跡ではない。今回の整理ではApplicationコード、Terraform、AWS、systemd、Secretを変更しておらず、新しい本番検証も行っていない。状態の記載は既存の証跡からの転記である。
+> 本書は案内であり、証跡ではない。**2026-11-16のAWS/ホスト変更と検証結果は[日付付きAs-Built](./infrastructure/observability-as-built-2026-11-16.md)に記録する。** 文書更新そのものは本番変更を伴わない。
 
-## 1. 現在の状態（2026-11-14）
+## 1. 現在の状態（2026-11-16）
 
 | 項目 | 状態 |
 |---|---|
@@ -16,10 +16,11 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | Server Traces / Metrics | 本番で有効、検証済み |
 | 監視基盤 | OTLP Gateway、OTel Collector、Tempo、Prometheus、Grafanaが稼働 |
 | Browser RUM | コードはあるが本番無効 |
-| Logs集中管理、Edge監視、Alerting、SLO、自動復旧 | 未完成 |
+| Rolling 7-Day Dashboard、成功翻訳95%/10s SLOとGrafana→Discord通知 | 初期実装・通知Firing/Resolved検証済み。7d実績は未判定 |
+| Logs集中管理、Edge監視、Telemetry欠損監視、自動復旧 | 未完成 |
 | 監視InfrastructureのTerraform再現性 | 部分的。ホスト上の構成は手動 |
 
-詳細と根拠は[infrastructure/production-state.md](./infrastructure/production-state.md)にある。この表と食い違う場合はそちらを正とする。
+最新の実測は[2026-11-16 As-Built](./infrastructure/observability-as-built-2026-11-16.md)、詳細と現在状態の要約は[infrastructure/production-state.md](./infrastructure/production-state.md)にある。この表と食い違う場合はそちらを正とする。
 
 ## 2. Source of Truth
 
@@ -88,7 +89,7 @@ As-To-Beは現状の根拠にならない。Terraformの宣言は、AWS実環境
 | 依存とBuild設定 | `package.json`、`package-lock.json`、`next.config.ts`、`tsconfig.json`、`eslint.config.mjs`、`postcss.config.mjs` | Development | Development |
 | 環境変数の名前と意味 | `.env.example` | Development | Development（Infrastructureと合意のうえ） |
 | Release ArtifactのBuild | `.github/workflows/build-arm64.yml` | Development | Development（Artifactの形式はInfrastructureと合意のうえ） |
-| AWS資源の定義 | `infra/terraform/v5/`、`infra/terraform/observability/` | Infrastructure | Infrastructure |
+| AWS資源の定義 | `infra/terraform/v5/`、`infra/terraform/observability/`、`infra/terraform/discord-alert-egress/` | Infrastructure | Infrastructure |
 | ホスト構成と監視基盤の設定 | リポジトリに無い（EC2上） | Infrastructure | Infrastructure |
 
 `src/`・`test/`・`e2e/`を変える作業は`infra/`に触れない。`infra/`を変える作業は`src/`・`test/`・`e2e/`に触れない。両方にまたがる変更は、下の「受け渡し」を先に更新し、領域ごとに別のCommitにする。
