@@ -342,6 +342,45 @@ Remaining limitations:
 - UptimeRobot remains unconfigured.
 - CloudWatch GetMetricData may incur charges.
 
+
+### 8.9 Squid boot recovery configuration
+
+The Spot recovery incident on 2026-11-17 confirmed a startup
+race between Squid and the Docker bridge interface.
+
+Version-controlled systemd drop-in:
+
+`infra/observability/squid/10-docker-bridge.conf`
+
+Deployment destination:
+
+`/etc/systemd/system/squid.service.d/10-docker-bridge.conf`
+
+Version-controlled readiness script:
+
+`infra/observability/squid/gmsv5-wait-squid-bridge.sh`
+
+Deployment destination:
+
+`/usr/local/sbin/gmsv5-wait-squid-bridge.sh`
+
+Installation steps on Observability EC2:
+
+1. Install the readiness script with permissions 0755.
+2. Install the systemd drop-in with permissions 0644.
+3. Execute `sudo systemctl daemon-reload`.
+4. Execute `sudo systemd-analyze verify squid.service`.
+5. Execute the readiness script as user squid.
+6. Restart Squid using `sudo systemctl restart squid`.
+7. Check `systemctl is-active squid`.
+8. Verify CloudWatch HTTPS CONNECT from Grafana.
+
+The drop-in starts Squid after Docker and waits for
+the Docker gateway address before binding the listener.
+
+A manual Squid restart after remediation passed.
+Full EC2 reboot recovery after remediation is not yet verified.
+
 ## 9. UptimeRobot (manual setup; independently hosted monitoring)
 
 1. Create/log into a Free account at https://uptimerobot.com/ (no AWS access needed).

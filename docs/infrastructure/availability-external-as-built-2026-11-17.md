@@ -103,3 +103,71 @@ Lambda runtime.
 
 The host-local `grafana.env`, Discord tokens, Terraform state and
 Grafana SQLite database must never be committed to Git.
+
+## 7. Actual Spot recovery and Squid failure
+
+**Incident date:** 2026-11-17 JST.
+
+Actual EC2 lifecycle and public HTTP recovery notifications
+were observed following Spot interruptions.
+
+Reported stop-to-recovery measurements:
+
+- Application EC2: 86, 293, and 445 seconds.
+- Observability EC2: 72, 69, and 76 seconds.
+
+Application recovery was based on observed HTTP 200.
+Observability recovery meant EC2 running only.
+
+The Grafana availability dashboard displayed actual
+StopToRecoverySeconds metric data.
+
+### 7.1 Squid startup failure
+
+On the Observability EC2, Squid failed during reboot
+at 2026-11-17 00:20:48 UTC.
+
+Evidence from /var/log/squid/cache.log:
+
+- Cannot bind to 172.18.0.1:3128
+- Error 99: Cannot assign requested address
+- FATAL: Unable to open HTTP Socket
+
+Docker started at approximately the same time and completed
+initialization at 00:20:51 UTC.
+
+Root cause: Squid attempted to bind to the Docker bridge
+gateway before the address was available.
+
+Grafana itself recovered, but CloudWatch connectivity
+remained unavailable until Squid was manually started.
+
+### 7.2 Remediation
+
+Installed a systemd drop-in with:
+
+- Wants=docker.service
+- After=docker.service
+- ExecStartPre bridge readiness wait
+- TimeoutStartSec=100s
+- Restart=on-failure
+- RestartSec=20s
+
+The readiness script waits up to 60 seconds for 172.18.0.1.
+
+Verification after applying the drop-in:
+
+- systemd-analyze verify: no Squid unit errors
+- Bridge readiness check: PASS
+- Squid restart: PASS
+- Squid service: active
+- Grafana-to-CloudWatch CONNECT: 200
+- Unsigned CloudWatch root HTTP response: 404
+
+The post-remediation EC2 reboot recovery test remains pending.
+Do not claim that the next Spot recovery has been verified.
+
+### 7.3 Version-controlled recovery assets
+
+- infra/observability/squid/10-docker-bridge.conf
+- infra/observability/squid/gmsv5-wait-squid-bridge.sh
