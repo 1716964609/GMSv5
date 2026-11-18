@@ -145,7 +145,14 @@ def extract_archive(archive, destination):
             "Missing .next directory",
         )
 
-        destination.chmod(0o755)
+        # Do not depend on the caller's umask.
+        # Keep all release directories readable and traversable
+        # without making them writable by the application user.
+        for directory, _, _ in os.walk(
+            root, topdown=False, followlinks=False
+        ):
+            Path(directory).chmod(0o755)
+
 
     except BaseException:
         shutil.rmtree(destination)
