@@ -107,13 +107,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          PYTHONPATH=infra/deployment python3 -B -c '
-          import sys
-          from artifact import verify_manifest
-
-          verify_manifest(sys.argv[1], sys.argv[2])
-          print("CD ARTIFACT VERIFICATION: PASS")
-          ' "$RUNNER_TEMP/release" "$GITHUB_SHA"
+          python3 -B infra/deployment/artifact.py verify \
+            "$RUNNER_TEMP/release" "$GITHUB_SHA"
 
       - name: Assume AWS deployment role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
