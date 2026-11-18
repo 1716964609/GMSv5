@@ -1,0 +1,11 @@
+[Unit]
+Description=GMS v5 deployment recovery before application startup
+RequiresMountsFor=/mnt/gms-data
+Before=gmsv5.service
+
+[Service]
+Type=oneshot
+User=root
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/bin/python3 -B /opt/gmsv5/deploy/state.py lock /var/lib/gmsv5-deploy /usr/bin/python3 -B /opt/gmsv5/deploy/boot_recovery.py prepare
