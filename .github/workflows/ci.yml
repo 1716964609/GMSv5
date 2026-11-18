@@ -17,6 +17,8 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-24.04-arm
+    env:
+      GMS_BUILD_SHA: ${{ github.sha }}
     timeout-minutes: 20
 
     steps:
