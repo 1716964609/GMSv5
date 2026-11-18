@@ -9,14 +9,16 @@ GMS v5は、自分の用語集を管理し、翻訳に使う用語を選んでDe
 ## 公開サイトと現在のリリース
 
 - **公開サイト：** [sunlightjetrans.com](https://sunlightjetrans.com)
-- **本番アプリケーション：** `364d0b7ebd4868f6d54b271ce9144b001bd380ca`（2026年11月14日に本番で確認）。直前のリリースは`9783463dcdd3f3b10f743ab3e1488978b842b4be`（2026年11月8日）で、切り戻し用に保持しています。
-- **監視：** サーバー側のTraceとMetricsを本番で有効化し、確認済みです。Browser RUMは実装済みですが本番では無効です。ログの集中管理、Edge監視、アラート、SLO、自動復旧は未完成です。
+- **本番アプリケーション：** `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`（2026年11月19日、`main`へのPushによる自動デプロイ。[Run 44353371110](https://github.com/1716964609/GMSv5/actions/runs/44353371110)）。以後のMergeで自動的に更新されます。手動でデプロイした最後のリリースは`364d0b7`（2026年11月14日）です。
+- **CI/CD：** Pull RequestはCI Quality Gateの成功が必須です。保護された`main`へMergeすると、そのコミットをビルド・公開し、本番へ自動デプロイします。
+- **復旧：** 自動ロールバックと再起動時の復旧（Boot Recovery）は、本番EC2で受入に合格しました。どちらも障害を制御して注入した試験です。
+- **監視：** サーバー側のTraceとMetricsを本番で有効化し、確認済みです。翻訳遅延のSLOアラート、外部からの死活監視、デプロイ結果の監視が稼働しています。Browser RUMは実装済みですが本番では無効です。ログの集中管理とEdge監視は未完成で、SLOの7日間の達成実績はまだありません。
 - **Baseline 1.2：** 紫系の公開LP刷新（CR-02）と、大量用語選択の制限付き並列取得（CR-01）を本番反映。
 - **利用料金：** GMS自体は無料。DeepL・OpenAIのAPI利用料金は、利用者自身の契約条件に従います。
 
 LPのガラス調パネルは機能を伝えるコンセプトビジュアルです。実製品のスクリーンショットや、実行済み翻訳結果ではありません。
 
-以下の図は現行コードと既存の構築記録を要約しています。AWSへの再照会や本番試験は今回行っていません。実績と証拠の限界は[Production State](docs/infrastructure/production-state.md)と、そこから参照する日付付きAs-Builtを優先します。どの文書が何の根拠になるか、誰が責任を持つかは[Documentation Map](docs/README.md)にまとめています。
+以下の図は現行コードと既存の構築記録を要約しています。2026年11月19日の文書同期では、AWSへの再照会や本番試験は行っていません。実績と証拠の限界は[Production State](docs/infrastructure/production-state.md)と、そこから参照する日付付きAs-Builtを優先します。どの文書が何の根拠になるか、誰が責任を持つかは[Documentation Map](docs/README.md)にまとめています。
 
 ## 主な機能
 
@@ -38,8 +40,11 @@ LPのガラス調パネルは機能を伝えるコンセプトビジュアルで
 | 永続化 | Node.js `node:sqlite` / SQLite / 独立した暗号化Amazon EBS gp3 |
 | 認証 | Amazon Cognito Classic Hosted UI / OAuth Authorization Code / PKCE S256 |
 | 公開・外部接続 | DreamHost DNS / Amazon CloudFront / Nginx / IPv6-first |
-| 構築・配布 | Terraformと手動設定 / GitHub Actions ARM64 / Amazon S3 / AWS Systems Manager |
-| 監視 | OpenTelemetry SDK / 別EC2上のOTLP Gateway・OpenTelemetry Collector・Tempo・Prometheus・Grafana（Phase 1） |
+| 構築 | Terraformと手動設定 |
+| CI/CD | GitHub Actions（CI Quality Gate、ARM64 Build、CD）/ GitHub OIDC / Amazon S3（不変なリリース公開）/ AWS Systems Manager |
+| リリース切替 | 原子的なSymbolic Link置換 / Release-aware Readiness / 自動ロールバック / Boot Recovery |
+| 監視 | OpenTelemetry SDK / 別EC2上のOTLP Gateway・OpenTelemetry Collector・Tempo・Prometheus・Grafana |
+| 外部監視・通知 | Amazon EventBridge / AWS Lambda / Amazon DynamoDB / Amazon CloudWatch / Discord |
 
 ## システム全体の構成
 
@@ -65,6 +70,22 @@ flowchart TB
     DEEPL["DeepL API<br/>一次翻訳"]
     OPENAI["OpenAI API<br/>ポストエディティング"]
 
+    subgraph OPS["運用系（利用者の通信経路の外）"]
+        GHA["GitHub Actions<br/>CI Quality Gate・CD"]
+        REL["Amazon S3 / AWS Systems Manager<br/>リリース公開・遠隔実行"]
+        OBS["監視用EC2<br/>Collector・Tempo・Prometheus・Grafana"]
+        MON["EventBridge / Lambda<br/>外部監視・デプロイ結果"]
+        DISCORD["Discord<br/>通知"]
+    end
+
+    GHA -.->|OIDCで一時認証| REL
+    REL -.->|リリース切替| APP
+    APP -.->|OTLP/HTTPS over IPv6| OBS
+    MON -.->|HTTPS確認| IN
+    REL -.->|実行状態のイベント| MON
+    OBS -.->|アラート| DISCORD
+    MON -.->|通知| DISCORD
+
     B -.->|DNS照会| DNS
     B -->|Web HTTPS| IN
     IN -->|HTTPS over IPv6| NG
@@ -79,15 +100,18 @@ flowchart TB
     classDef core fill:#F2EEF8,stroke:#6F70A4,color:#26213F;
     classDef auth fill:#EEEAF5,stroke:#6F70A4,color:#26213F,stroke-dasharray:4 3;
     classDef external fill:#E5DDF1,stroke:#6F70A4,color:#26213F;
+    classDef ops fill:#F7F7FA,stroke:#6F70A4,color:#26213F,stroke-dasharray:4 3;
     class B,DNS,IN,NG,APP,DB,EBS core;
     class AUTH auth;
     class PROXY,DEEPL,OPENAI external;
+    class GHA,REL,OBS,MON,DISCORD ops;
     style EC2 fill:#F7F7FA,stroke:#9B9BC7,color:#26213F;
+    style OPS fill:#FFFFFF,stroke:#9B9BC7,color:#26213F,stroke-dasharray:4 3;
 ```
 
-実線の矢印は通常のWeb・内部処理、点線は名前解決または認証（ラベルで区別）、太線は外部翻訳APIへの送信を示します。DNSは名前解決だけを行い、HTTPリクエストを中継しません。認証の返却はCognitoからブラウザを介したリダイレクトで、通常の公開Ingressを通ってCallbackへ届きます。
+実線の矢印は通常のWeb・内部処理、点線は名前解決・認証・運用系の経路（ラベルで区別）、太線は外部翻訳APIへの送信を示します。DNSは名前解決だけを行い、HTTPリクエストを中継しません。認証の返却はCognitoからブラウザを介したリダイレクトで、通常の公開Ingressを通ってCallbackへ届きます。
 
-Diagram AはWeb公開と翻訳の経路を示します。リリース`364d0b7`で加わった監視の経路（Next.js → OTLP Gateway → Collector → Tempo / Prometheus → Grafana）は、[Architecture §14](docs/architecture.md)の図を参照してください。
+Diagram Aの上半分はWeb公開と翻訳の経路です。下の「運用系」は、デプロイと監視の経路を要約したものです。デプロイの詳細はDiagram Bと[Architecture §10](docs/architecture.md#10-ci--build--deployment)、監視の経路（Next.js → OTLP Gateway → Collector → Tempo / Prometheus → Grafana）と外部監視は[Architecture §14〜§15](docs/architecture.md#14-observability)の図を参照してください。
 
 公開用CloudFrontとDeepL専用CloudFrontは別Distributionです。DeepL専用経路にはCloudFront FunctionsとKeyValueStoreによる共有トークン検証・API許可リストがあり、キャッシュは無効です。OpenAI通信はこのプロキシを経由しません。
 
@@ -140,7 +164,9 @@ SQLite migration v2は`glossary_term_revisions`を追加します。Glossaryご�
 |---|---|
 | IPv6-first・パブリックIPv4なし | IPv4の継続課金を避ける構成。宛先のIPv6対応が制約になるため、外部サービスごとに接続経路を確認します。 |
 | DeepL専用CloudFront Proxy | 10月26日の記録ではEC2からDeepLへのIPv6直接接続が成立しませんでした。IPv6で到達できるCloudFrontを経由させ、DeepLのIPv4側Originへ接続します。NAT Gatewayは導入していません。 |
-| 小型EC2上のModular Monolith | MVPの費用・運用の複雑性を抑え、画面からDBまで単一アプリケーションで扱います。単一ホスト障害やSpot中断の影響は残り、水平分散や自動復旧を実装済みとはしません。 |
+| 小型EC2上のModular Monolith | MVPの費用・運用の複雑性を抑え、画面からDBまで単一アプリケーションで扱います。単一ホスト障害やSpot中断の影響は残ります。水平分散、無停止デプロイ、インスタンスの自動再作成は実装していません。 |
+| 既存構成を変えずにCI/CDを追加 | IPv6-only・ARM64・単一EC2のまま、GitHub OIDC・S3・SSMで配布します。GitHubに静的なAWS認証情報を置かず、EC2への受信ポートも増やしません。その代わり、デプロイのたびにサービスを再起動します。 |
+| リリースを不変にし、切替をトランザクションにする | 公開済みリリースは上書きできず、切替の意図は切替前に永続化します。失敗時は直前のリリースへ自動で戻します。戻すのはコードだけで、DBは戻しません。スキーマが変わるリリースは自動デプロイが拒否します。 |
 | SQLiteを独立EBSへ保存 | アプリケーションのリリースと永続データを分離します。暗号化gp3とTerraformの`prevent_destroy`を使いますが、これだけでバックアップや高可用性が保証されるわけではありません。 |
 | 公開CloudFront → NginxをHTTPS化 | ViewerだけでなくOrigin接続もTLSで保護。構築記録ではOrigin側のネットワーク制限と専用認証ヘッダーを併用しています。 |
 | 並列数を制限 | 往復待ちの短縮を狙いながら、小型EC2・SQLiteへの負荷を抑える設計です。同期SQLite処理そのものが並列数に比例して速くなるとは見込みません。 |
@@ -150,57 +176,79 @@ SQLite migration v2は`glossary_term_revisions`を追加します。Glossaryご�
 
 ## CI/CDとリリースの仕組み
 
-### Diagram B — Build & Release Flow
+本番へのデプロイは自動です。変更は、CI Quality Gateに合格したPull Requestを、保護された`main`へMergeすることでのみ本番に届きます。
+
+### Diagram B — CI/CD and Release Flow
 
 ```mermaid
 flowchart TB
-    DEV["開発者 / GitHub<br/>ソースとコミットを管理"]
-    RUN["GitHub Actions ARM64 Runner<br/>workflow_dispatchで手動起動"]
-    CHECK["npm ci / 型チェック / ESLint<br/>Next.js Standalone Build"]
-    ART["Release Artifact<br/>tar.gz + SHA256"]
-    PLATFORM["Platform Team<br/>成果物取得・SHA256検証・配布判断"]
-    S3["Amazon S3<br/>版別の成果物"]
-    SSM["AWS Systems Manager<br/>Run Commandなどの遠隔操作"]
-    SESSION["Session Manager<br/>使用実績は要確認"]
+    PR["Pull Request"]
+    CI["CI Quality Gate<br/>型チェック / ESLint / テスト / Build"]
+    MAIN["保護されたmain<br/>Quality Gateの成功が必須"]
+    BUILD["ARM64 Build<br/>tar.gz + SHA256 + Manifest"]
+    OIDC["GitHub OIDC → AWS STS<br/>静的な認証情報なし"]
+    S3["Amazon S3<br/>不変なリリース + デプロイLock"]
+    SSM["AWS Systems Manager<br/>デプロイ専用Document"]
 
-    subgraph HOST["EC2での切替・確認は手動工程を含む"]
-        RELEASE["版別Release Directory<br/>取得・SHA256再検証・展開"]
-        SERVICE["systemd<br/>対象版へ切替・再起動"]
-        READY{"Readiness Check<br/>Retry後に正常か"}
-        LIVE["稼働確認<br/>公開ページ・主要操作"]
-        ROLLBACK["Rollback<br/>旧版へ切戻し・再確認"]
-        RELEASE --> SERVICE
-        SERVICE --> READY
-        READY -->|正常| LIVE
-        READY -->|異常| ROLLBACK
+    subgraph HOST["本番EC2 / IPv6-only / ARM64"]
+        PRE["Preflight / 検証 / 安全な展開"]
+        SWITCH["原子的なリリース切替<br/>systemd再起動"]
+        READY{"期待するBuildのReadiness<br/>3回連続で成功?"}
+        LIVE["リリース確定"]
+        ROLLBACK["自動ロールバック<br/>直前のリリースへ"]
+        PRE --> SWITCH --> READY
+        READY -->|はい| LIVE
+        READY -->|いいえ| ROLLBACK
     end
 
-    DEV --> RUN
-    RUN --> CHECK
-    CHECK --> ART
-    ART --> PLATFORM
-    PLATFORM -->|手動アップロード| S3
-    PLATFORM -.->|手動で指示| SSM
-    SESSION -.->|接続手段の確認事項| SSM
-    SSM -.->|取得・切替を操作| RELEASE
-    S3 -->|EC2がHTTPS / Dualstackで取得| RELEASE
+    MON["EventBridge → Lambda<br/>DynamoDB / CloudWatch / Discord"]
+
+    PR --> CI --> MAIN --> BUILD --> OIDC
+    OIDC --> S3
+    OIDC --> SSM
+    SSM --> PRE
+    S3 -->|"HTTPS / Dualstack"| PRE
+    SSM -.->|"実行状態のイベント"| MON
 
     classDef step fill:#F2EEF8,stroke:#6F70A4,color:#26213F;
-    classDef manual fill:#E5DDF1,stroke:#6F70A4,color:#26213F;
-    classDef pending fill:#F7F7FA,stroke:#6F70A4,color:#26213F,stroke-dasharray:4 3;
-    class DEV,RUN,CHECK,ART,S3,RELEASE,SERVICE,READY,LIVE step;
-    class PLATFORM,SSM,ROLLBACK manual;
-    class SESSION pending;
+    classDef recover fill:#E5DDF1,stroke:#6F70A4,color:#26213F;
+    classDef monitor fill:#F7F7FA,stroke:#6F70A4,color:#26213F,stroke-dasharray:4 3;
+    class PR,CI,MAIN,BUILD,OIDC,S3,SSM,PRE,SWITCH,READY,LIVE step;
+    class ROLLBACK recover;
+    class MON monitor;
     style HOST fill:#F7F7FA,stroke:#9B9BC7,color:#26213F;
 ```
 
-[ARM64 workflow](.github/workflows/build-arm64.yml)が自動化するのは、手動起動後の検査・ビルド・梱包・Artifact保存までです。以降はPlatform Teamがチェックサムを確認し、S3への配布とSSM経由のEC2切替を行います。Git pushだけで本番更新する完全自動CDではありません。現行workflowには単体・結合テストの実行ステップがないため、開発テスト（`75d5b17`時点で114件）をCIでの実行件数には数えません。
+パイプラインが行うこと：
 
-10月26日にはReadiness確認が早すぎて一度切り戻し、その後Retryを導入して再デプロイした記録があります。11月8日はActions Run `42481781676`の成功、SHA256照合済み・S3→SSM→systemdでの配布が報告されています。11月8日のsystemd最終出力や切戻し資産の現存確認は別途必要です。
+- **Quality Gate：** 型チェック、ESLint、アプリケーションのテスト、デプロイエンジンのテスト、死活監視のテスト、本番ビルド、Standalone出力の確認。自動テストは合計298件（アプリケーション125、デプロイエンジン140、死活監視33）です。Quality Gateは全件を実行し、リリース用のビルドは前の2つを実行します。
+- **検証済みの成果物：** Linux ARM64上でビルドし、tar.gz、SHA256、リリースManifestを作ります。梱包したリリースを実際に起動し、Readinessを確認してから保存します。
+- **一時的な認証：** GitHub ActionsはOIDCで、権限を絞ったIAM Roleを引き受けます。GitHubに静的なAWS認証情報はありません。
+- **不変な公開：** リリースは条件付き書き込みでS3へ公開します。公開済みのリリースを、デプロイ用のRoleで上書き・削除することはできません。
+- **直列化：** S3上のLockとホスト上のLockで、デプロイの重複を防ぎます。
+- **トランザクションとしての切替：** EC2上のRoot所有のデプロイエンジンが、成果物を検証し、安全に展開し、切替の意図を永続化してから`current`のSymbolic Linkを原子的に置き換え、サービスを再起動します。
+- **Release-aware Readiness：** `/api/health/ready`が、期待するBuild、DBへの到達、必須テーブル、適用済みMigrationを3回連続で返すことを確認します。
+- **自動ロールバック：** 新しいリリースが準備完了にならなければ、直前のリリースへ戻し、そのReadinessを確認します。
+- **Boot Recovery：** デプロイの途中でインスタンスが再起動した場合、systemdのUnitがアプリケーションの起動前に直前のリリースを選び、起動後に確認します。
+- **デプロイの監視：** デプロイの実行状態をDynamoDBとCloudWatchに記録し、Discordへ通知します。死活監視やSpot中断のイベントとは区別して記録します。
 
-現行リリース`364d0b7`は、11月13日の[Build ARM64 Release #11 / Run 43435258778](https://github.com/1716964609/GMSv5/actions/runs/43435258778)（成功、Head SHA一致）の成果物です。SHA256照合済みは運用者の報告によります。本番での起動とReadiness 200は[Observability As-Built §12](docs/infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance)に記録されています。切替時のSSM Command IDとsystemdの最終出力は記録されていません。
+これらは2026年11月19日に本番EC2で受入に合格しました。証跡、計測した所要時間とその限界は[CI/CD As-Built](docs/infrastructure/cicd-as-built-2026-11-19.md)、設計と状態遷移の図は[Architecture §10](docs/architecture.md#10-ci--build--deployment)、運用は[CI/CD Operations Runbook](docs/infrastructure/cicd-operations-runbook.md)にあります。
 
-**SSMの記載差：** ArchitectureはRun Command、10月26日の手順は「SSMで接続」、11月8日の報告は「SSM経由」と記載しています。Session ManagerとRun Commandは異なる操作手段であり、Session Managerの使用実績まではこれらの記録から確定しません。図にも要確認として示し、推測で使用済みとは扱いません。
+2026年11月18日までは、必要なときに手動でビルドを起動し、手作業でデプロイしていました。10月26日にはReadiness確認が早すぎて一度切り戻し、Retryを導入して再デプロイした記録があります。手動リリース時代の記録（11月8日のRun `42481781676`、11月13日のRun `43435258778`）は[Architecture §10.8](docs/architecture.md#108-履歴--2026年11月18日までの手動release)と各As-Builtに残しています。
+
+### 実装していないこと・確認していないこと
+
+- 無停止デプロイ。本番は単一インスタンスで、切替のたびにサービスを再起動します。
+- DBの自動ロールバック。戻すのはアプリケーションのコードだけです。Migrationの定義が変わるリリースは、切替前に拒否します。
+- リリースの自動削除、CDによるデプロイエンジンの更新。エンジンの導入と更新は運用者が行います。
+- 結果が不明なデプロイからの自動復旧。運用者が状態を確認するまで、Lockを保持します。
+- Spot停止時のインスタンスの自動再作成、ENI/EBSの再構成。Boot Recoveryは同じインスタンスの再起動を扱うもので、別の機能です。
+- 実障害でのロールバックとBoot Recovery。受入では、Readinessの失敗を制御して注入しました。Boot Recoveryは、中断したトランザクションを模擬したうえでの実際のOS再起動で確認しており、実際のSpot容量回収では確認していません。
+- 失敗したデプロイのDiscord通知の着信。開始と成功の通知は本番で確認済みで、失敗系は単体テストでの確認です。通知はBest-effortです。
+- Grafanaのデプロイ用パネル。CloudWatchのMetricはあります。
+- CI/CD受入での、認証を伴うE2Eと翻訳機能の再確認。
+
+CI/CDの記録にある所要時間（ロールバック処理が約11秒など）は処理の所要時間です。外部から測った停止時間、確立したRTO、保証されたSLOではありません。
 
 ## セキュリティ・データ管理
 
@@ -220,21 +268,22 @@ CognitoのAuthorization Code FlowをPKCE S256とOAuth stateで保護し、返却
 | Select All所要時間 | 旧版約40秒 → 新版約27秒、参考短縮率約32.5%。同条件の反復測定・正式なp95比較ではありません。 |
 | 性能受入 | p95≤20秒・逐次比50%以上短縮は暫定目標。上記観測から達成済みとはしません。同時数1・2・4の正式比較は未実施です。 |
 | 監視 Phase 1（2026年11月14日） | 本番の実リクエストのTraceをGrafanaで確認。翻訳1件は約6.87秒、うちDeepL約3.22秒、OpenAI約3.64秒。Prometheusの監視対象は4/4が稼働。1回の観測であり、基準値やSLOではありません。 |
-| 開発検証 | Baseline 1.2の記録では単体・結合83件成功・失敗0件。Observability実装後（`75d5b17`）の記録では114件成功、型チェック成功、Lintエラー0件・既存警告2件。今回の文書作業では再実行していません。 |
-| Build | Run `43435258778`（Release #11、`364d0b7`）とRun `42481781676`（Release #10、`9783463`）の成功とHead SHAの一致を確認済み。SHA256 Verifiedは運用者の報告によります。 |
+| 開発検証 | 2026年11月19日に、`main`（`53ece4d`）と同じコードで3つのテストスイートをローカル実行し、298件すべて成功（アプリケーション125、デプロイエンジン140、死活監視33）。Lintはエラー0件・警告4件。過去の記録は、Baseline 1.2で83件、Observability実装後（`75d5b17`）で114件です。 |
+| CI/CD（2026年11月19日） | Quality Gate、OIDC認証、S3への不変な公開、`main`へのPushによる自動デプロイ、自動ロールバック、Boot Recovery、デプロイ結果の記録と開始・成功の通知を本番で確認。GitHub側の記録は再照合済み、AWS側の結果は運用者が提示した受入証跡によります。 |
+| 過去のBuild | Run `43435258778`（Release #11、`364d0b7`）とRun `42481781676`（Release #10、`9783463`）の成功とHead SHAの一致を確認済み。SHA256 Verifiedは運用者の報告によります。 |
 | バックアップ・移行準備 | オンラインバックアップ整合性OK、EBS snapshot completed、隔離DB v1→v2と整合性検証PASSとの報告。本番移行後の実測値には置き換えません。 |
-| 要確認 | 本番Migration適用ログ、systemd最終状態、Rollback資産と復元試験、変更409・Abort等の網羅的E2E、端末幅・支援技術・SEOの総合評価。 |
+| 要確認 | 本番Migration適用時のログ（適用済みであることはReadinessの成功から間接的に確認できます）、DBを含む復元試験、失敗系デプロイ通知の着信、変更409・Abort等の網羅的E2E、端末幅・支援技術・SEOの総合評価。 |
 
 ### 資料とコードの差異・確認事項
 
 | 対象 | 照合結果 |
 |---|---|
 | 認証サービスの選定 | RequirementsのOD-03とUse Casesの継続レビュー事項には選定が残っていますが、コードとAs-BuiltではCognitoを採用済みです。 |
-| EBSのマウント確認 | Architectureの「EBS未マウント時に起動しない」に対し、`src/lib/db/sqlite.ts`の直接の検査は絶対パスと親ディレクトリの存在です。コード単体でマウント先デバイスまでは検証しません。 |
+| EBSのマウント確認 | Architectureの「EBS未マウント時に起動しない」に対し、`src/lib/db/sqlite.ts`の直接の検査は絶対パスと親ディレクトリの存在です。アプリケーションのコード単体ではマウント先デバイスまでは検証しません。2026年11月19日からは、起動前のGuardとデプロイのPreflightが、データ用ファイルシステムのUUIDを確認します。 |
 | IaCの網羅性 | Terraformは手動で設定した公開経路・Origin制限の全てを表しません。構築記録との併読が必要です。 |
 | ローカル認証のポート | `.env.example`は3000、CognitoのTerraform定義は3100を許可しています。下記手順では3100に揃えますが、実際に利用するCognitoの許可URLは設定担当者に確認してください。 |
 
-これらは今回の文書作業で仕様や設定を変更せず、確認事項として明示しています。SSMの操作手段の記載差も前節のとおりです。
+これらは文書作業で仕様や設定を変更せず、確認事項として明示しています。以前ここに挙げていたSSMの操作手段の記載差（Run CommandかSession Managerか）は、手動リリース時代の記録についてのものです。現在のデプロイはSSMの専用DocumentによるRun Commandで行います。
 
 ## リポジトリ構成と責任範囲
 
@@ -249,7 +298,7 @@ CognitoのAuthorization Code FlowをPKCE S256とOAuth stateで保護し、返却
 
 ## ローカル開発
 
-前提はNode.js 26とnpmです。以下は開発者向けの操作例であり、今回の文書作業で実行したものではありません。
+前提はNode.js 26とnpmです。以下は開発者向けの操作例です。
 
 ```bash
 npm ci
@@ -279,8 +328,10 @@ npm run dev -- --port 3100
 ```bash
 npm run typecheck
 npm run lint
-node --experimental-strip-types --test test/*.test.ts
+npm test
 ```
+
+Pull Requestでは、CI Quality Gateが同じ検査に加えてデプロイエンジンと死活監視のテスト、本番ビルドを実行します。`main`へMergeすると本番へ自動デプロイされます。
 
 `NEXT_PUBLIC_GMS_TERM_FETCH_CONCURRENCY`はビルド時の公開設定です。本番での1・2・4比較はPlatform Teamの測定計画に従います。本番DB・AWSの操作手順はこのREADMEでは展開しません。
 
@@ -292,15 +343,18 @@ node --experimental-strip-types --test test/*.test.ts
 | [Requirements](docs/requirements.md) / [Use Cases](docs/use-cases.md) | 要件、操作フロー、受入条件 |
 | [Entity Model](docs/entity-model.md) | 業務エンティティと所有関係 |
 | [Documentation Map](docs/README.md) | 問いごとの正となる文書、文書の優先順位、責任分担、AI Agent向けの読み順 |
-| [Production Architecture](docs/architecture.md) | ネットワーク・認証・永続化・監視の構成（As-Is） |
+| [Production Architecture](docs/architecture.md) | ネットワーク・認証・永続化・CI/CD・監視の構成（As-Is）。状態遷移、ロールバック、Boot Recovery、デプロイ監視の図を含む |
 | [Production State](docs/infrastructure/production-state.md) | 現在の本番状態。実測、Terraformの管理範囲、手動構築、未実装を区別 |
+| [CI/CD As-Built 2026-11-19](docs/infrastructure/cicd-as-built-2026-11-19.md) / [CI/CD Operations Runbook](docs/infrastructure/cicd-operations-runbook.md) | CI/CD・自動ロールバック・Boot Recovery・デプロイ監視の本番受入の証跡と、運用手順 |
 | [Development文書](docs/development/README.md) / [Telemetry Schema v1](docs/development/observability/application-instrumentation.md) | アプリケーションの範囲、Span・Metric・設定・Redactionの定義 |
 | [Infrastructure文書](docs/infrastructure/README.md) / [Observability As-Built 2026-11-13](docs/infrastructure/observability-as-built-2026-11-13.md) | インフラの範囲と記録の規則、監視基盤の証跡（§12が11月14日の本番受入） |
+| [Observability As-Built 2026-11-16](docs/infrastructure/observability-as-built-2026-11-16.md) / [Availability As-Built 2026-11-17](docs/infrastructure/availability-external-as-built-2026-11-17.md) | 翻訳SLOとDiscord通知、外部からの死活監視とSpot中断の監視 |
 | [Architecture As-To-Be — Add Observability](docs/architecture-as-to-be-add-observability.md) | 監視の目標構成。未実装の項目を含む |
 | [Production As-Built 2026-11-08](docs/infrastructure/production-as-built-2026-11-08.md) | Baseline 1.2（`9783463`）の実績、根拠と未確認事項（履歴） |
 | [Production As-Built 2026-10-26](docs/infrastructure/production-as-built-2026-10-26.md) | 初期構築とDeepL接続障害への対応履歴 |
 | [CR-01技術設計](docs/design/cr-01-parallel-fetch-design.md) | 制限付き並列取得・改訂管理・性能測定計画 |
 | [Baseline 1.2デザイン記録](docs/design/baseline-1.2-proposal.md) | 公開LPの承認済み方針と変更履歴 |
-| [Terraform（本番）](infra/terraform/v5/main.tf) / [Terraform（監視）](infra/terraform/observability/main.tf) / [ARM64 workflow](.github/workflows/build-arm64.yml) | コード化された構築・ビルド範囲 |
+| [Terraform（本番）](infra/terraform/v5/main.tf) / [Terraform（監視）](infra/terraform/observability/main.tf) / [Terraform（CI/CD）](infra/terraform/v5/cicd.tf) | コード化された構築範囲 |
+| [CI workflow](.github/workflows/ci.yml) / [ARM64 workflow](.github/workflows/build-arm64.yml) / [CD workflow](.github/workflows/cd.yml) / [デプロイエンジン](infra/deployment/) | コード化された検査・ビルド・デプロイ |
 
 図はGitHubが標準対応するMermaid fenced code blockで管理しています。構文の参照先は[GitHubの図の作成方法](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams)と[Mermaid flowchart仕様](https://mermaid.js.org/syntax/flowchart.html)です。GitHub側の描画バージョンや画面幅による最終的な見え方は、Product Ownerのリポジトリレビューで確認してください。

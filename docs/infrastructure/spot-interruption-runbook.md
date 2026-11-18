@@ -1,10 +1,20 @@
 # GMS v5 — EC2 Spot Interruption and Recovery Runbook
 
 - **Owner:** Infrastructure / SRE
-- **Updated:** 2026-11-16 JST
+- **Updated:** 2026-11-16 JST; cross-references added 2026-11-19
 - **Scope:** Production Application EC2 and Observability EC2
 - **Evidence:** [2026-11-16 As-Built Section 10](./observability-as-built-2026-11-16.md)
 - **Status:** Operational recovery observed; automated recovery after a future interruption not fully validated.
+
+> **Added 2026-11-19:** two things changed after this runbook was written.
+> External monitoring independent of the Observability EC2 was deployed on
+> 2026-11-17 ([As-Built](./availability-external-as-built-2026-11-17.md),
+> [Runbook](./availability-external-runbook.md)). Application releases are
+> now managed by a deployment engine with boot recovery
+> ([CI/CD Runbook](./cicd-operations-runbook.md)). Boot recovery restores
+> the previous release when the same instance restarts in the middle of a
+> deployment. It does not replace an instance or rebuild its ENI or EBS
+> volumes, and it has not been exercised by an actual Spot reclamation.
 
 ## 1. Incident model
 
@@ -92,6 +102,22 @@ curl -sS --max-time 5 -o /dev/null \
 
 `active` and HTTP 200 confirm local process/readiness,
 not externally measured CloudFront or browser availability.
+
+Since 2026-11-19, also check boot recovery and the active release
+(read-only):
+
+~~~bash
+systemctl status gmsv5-boot-prepare.service --no-pager
+systemctl status gmsv5-boot-verify.service --no-pager
+readlink /opt/gmsv5/current
+curl -fsS http://127.0.0.1:3000/api/health/ready
+~~~
+
+The readiness response names the running release. It must match the
+`current` link. If a deployment was in progress when the instance
+stopped, follow "Boot recovery investigation" in the
+[CI/CD Runbook](./cicd-operations-runbook.md) and do not start a new
+deployment until the transaction is resolved.
 
 Do not modify the Application release, database, systemd
 or networking based only on an EC2 interruption event.
@@ -187,8 +213,10 @@ See [Translation SLO and Alerting Runbook](./observability/translation-slo-alert
 - Preserve the `always` restart policy in reproducible provisioning.
 - Test subsequent automatic EC2 boot recovery in a controlled window.
 - Implement external monitoring independent of Observability EC2.
+  (Done 2026-11-17; see the note at the top.)
 - Capture future Spot interruption warnings and rebalance
   recommendations using EventBridge and protected event storage.
+  (Done 2026-11-17 with EventBridge and DynamoDB.)
 - Back up critical configuration, Terraform State and secrets
   outside Git; perform restore drills.
 - Reduce correlated Spot risk or adopt an availability design

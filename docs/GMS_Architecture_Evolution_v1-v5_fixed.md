@@ -11,7 +11,7 @@
 > - **v2：** `v2-reconstructed` ブランチに保存されたREADME・Nginx・systemd・fstabによる再構成Baseline。元の全ソースと完全一致するという意味ではありません。
 > - **v3.1：** Terraform・GitHub Actionsと、当時の最終統合試験の記録による構成。現在のAWS実状態は再監査していません。
 > - **v4：** ソースコード上のアプリケーション構成。**本番未デプロイ**です。
-> - **v5：** 2026年11月8日のリリース記録と現行のREADME・コードによる構成。本番の網羅的E2E・正式な性能受入が全て完了したという意味ではありません。
+> - **v5：** 2026年11月8日のリリース記録と現行のREADME・コードによる構成。本番の網羅的E2E・正式な性能受入が全て完了したという意味ではありません。CI/CDと監視については、2026年11月19日の状態を§7・§8に追記しています。
 
 ## 1. 全体像 — 5世代の変遷
 
@@ -277,14 +277,21 @@ flowchart TB
         A2 --> A3["OIDC → S3 → SSM"]
         A3 --> A4["EC2 / systemd<br/>health / rollback"]
     end
-    subgraph V5["v5：手動工程を含むRelease"]
+    subgraph V5A["v5（2026年11月18日まで）：手動工程を含むRelease"]
         B1["workflow_dispatch"] --> B2["GitHub Actions ARM64<br/>build / artifact"]
         B2 --> B3["手動でArtifact検証・S3配布"]
         B3 --> B4["SSM経由でEC2切替<br/>systemd / readiness"]
     end
+    subgraph V5B["v5（2026年11月19日から）：Merge後の自動Deployment"]
+        C1["Pull Request<br/>CI Quality Gate"] --> C2["mainへMerge<br/>ARM64 build + test"]
+        C2 --> C3["OIDC → S3（不変な公開）→ SSM"]
+        C3 --> C4["EC2 / 原子的な切替<br/>Release-aware Readiness"]
+        C4 --> C5["確定 または 自動Rollback<br/>再起動時はBoot Recovery"]
+    end
+    V5A -->|"CI/CDの導入"| V5B
 ```
 
-v3.1の自動CD、v4の未デプロイ、v5の手動リリースを混同しないことが重要です。v5のGitHub Actions Buildには、開発段階の単体・結合テストを自動実行するステップがないことも、現行READMEで区別しています。
+v3.1の自動CD、v4の未デプロイ、v5の2つの時期を混同しないことが重要です。v5は2026年11月18日まで手動リリースで、当時のGitHub Actions Buildには単体・結合テストを自動実行するステップがありませんでした。2026年11月19日から、Pull RequestでのQuality Gateと、`main`へのMergeによる自動Deploymentに変わりました。v3.1とv5はどちらもOIDC・S3・SSMを使いますが、v5は不変なRelease公開、Transactionの状態管理、Release-aware Readiness、Boot Recoveryを備えます。詳細は[Production Architecture §10](architecture.md#10-ci--build--deployment)にあります。
 
 ## 8. バージョン比較
 
@@ -295,8 +302,8 @@ v3.1の自動CD、v4の未デプロイ、v5の手動リリースを混同しな�
 | DB | RDS MySQL | EC2内MySQL | EC2内MySQL | SQLite / Drizzle | SQLite / node:sqlite |
 | 永続データ | RDS | 専用EBS | 専用EBS + Snapshot | ローカルSQLite | 暗号化独立EBS |
 | 公開入口 | EC2・Nginx（詳細未確認） | EC2・Nginx | CloudFront / HTTP IPv6 Origin | **未デプロイ** | CloudFront / HTTPS IPv6 Origin |
-| 構築・配布 | 記録不足 | systemd / 手動 | Terraform / 自動CI/CD | ローカル開発・テスト | Terraform＋手動設定 / ARM64 Build＋手動Release |
-| Observability | 確認資料なし | 確認資料なし | Actuator＋Mac上Prometheus/Grafana | 自動テスト中心 | As-Built・検証記録 |
+| 構築・配布 | 記録不足 | systemd / 手動 | Terraform / 自動CI/CD | ローカル開発・テスト | Terraform＋手動設定 / 2026年11月19日から自動CI/CD（それまではARM64 Build＋手動Release） |
+| Observability | 確認資料なし | 確認資料なし | Actuator＋Mac上Prometheus/Grafana | 自動テスト中心 | OpenTelemetry＋別EC2のTempo/Prometheus/Grafana、外部監視（2026年11月14日以降。領域ごとに完成度が異なる） |
 | 翻訳 | 用語検索・管理 | 用語検索・管理 | 用語検索・管理 | DeepL → OpenAI | DeepL → OpenAI＋永続Glossary選択 |
 
 「確認資料なし」は、その時代に該当機能が絶対存在しなかったという意味ではありません。旧バージョンの記述は、それぞれの指定ブランチと保存された資料の範囲に限定しています。
@@ -309,8 +316,8 @@ v3.1の自動CD、v4の未デプロイ、v5の手動リリースを混同しな�
 
 **v3.1 → v4：アプリケーションそのものの目的と境界を再設計。** Spring Boot用語管理からNext.jsの二段階翻訳へ。ただしv4の成果は実装・テストであり、AWS本番運用の継続を意味しません。
 
-**v4 → v5：実際の利用者と本番運用に向けた拡張。** Cognito認証、ユーザー別用語集、BYOK、IPv6-first Networking、DeepLの接続制約への対応を追加。一方、単一EC2、Spot中断、手動リリースなどのトレードオフは残っています。
+**v4 → v5：実際の利用者と本番運用に向けた拡張。** Cognito認証、ユーザー別用語集、BYOK、IPv6-first Networking、DeepLの接続制約への対応を追加。2026年11月には監視基盤と自動CI/CDを加えました。一方、単一EC2、Spot中断、デプロイ時の再起動などのトレードオフは残っています。
 
 ---
 
-**現行v5の正確な設計と確認済み実績は** [README.ja.md](../README.ja.md)、[Production Architecture](architecture.md)、[2026-11-08 As-Built](infrastructure/production-as-built-2026-11-08.md) **を優先してください。** この資料は世代間の比較であり、旧AWS環境を再稼働して確認した記録ではありません。
+**現行v5の正確な設計と確認済み実績は** [README.ja.md](../README.ja.md)、[Production Architecture](architecture.md)、[Production State](infrastructure/production-state.md) **を優先してください。** この資料は世代間の比較であり、旧AWS環境を再稼働して確認した記録ではありません。

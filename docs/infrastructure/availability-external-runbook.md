@@ -5,6 +5,28 @@
 - Scope: `infra/terraform/availability/` only; existing production resources remain unchanged
 - Status: **AWS DEPLOYED; HTTP, Discord and Grafana verified; real EC2 event delivery and UptimeRobot pending**
 
+> **Added 2026-11-19:** this runbook is kept as written on 2026-11-17.
+> Read it with three later facts in mind.
+>
+> 1. [As-Built §7](./availability-external-as-built-2026-11-17.md#7-actual-spot-recovery-and-squid-failure)
+>    records that real EC2 lifecycle and HTTP recovery notifications were
+>    observed after actual Spot interruptions later on 2026-11-17, and
+>    that the dashboard showed real `StopToRecoverySeconds` data. The
+>    statements below that real EC2 event delivery is unverified and that
+>    the metric has not been emitted predate that record. Recovery of
+>    Squid and Grafana after an EC2 reboot following the remediation, and
+>    UptimeRobot, are still pending.
+> 2. Since 2026-11-19 the same Lambda function also records production
+>    deployment events (`infra/terraform/availability/deployment.tf`,
+>    `lambda/deployment.py`): records keyed `deployment#<instance>` and
+>    the metric `DeploymentEvents`. They are separate from the EC2 and
+>    HTTP records described here. See
+>    [CI/CD Operations Runbook](./cicd-operations-runbook.md) and
+>    [Architecture §15](../architecture.md#15-deployment-observability2026-11-19).
+> 3. The test suite of this module now has 33 tests, including the
+>    deployment handler tests, and runs in the CI Quality Gate. The
+>    "19/19" result in §5 is the 2026-11-17 figure.
+
 ## 1. Architecture
 
 ```text

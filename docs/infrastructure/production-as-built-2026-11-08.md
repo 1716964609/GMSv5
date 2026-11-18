@@ -1,6 +1,8 @@
 # GMS v5 — Baseline 1.2 Production As-Built
 
 > **Historical（2026-11-14追記）：** 本書は2026年11月8日のBaseline 1.2リリース（`9783463`）の記録である。下の「Current release」は記録時点の値であり、現在の本番Releaseは`364d0b7`である。`9783463`はRollback用に保持されている。現在の状態は[production-state.md](production-state.md)を参照する。本文は記録時のまま変更していない。
+>
+> **Historical（2026-11-19追記）：** 上の2026-11-14の注記にある「現在の本番Releaseは`364d0b7`」「`9783463`はRollback用に保持」も、その時点の記述である。2026-11-19から本番Deploymentは自動化され、RollbackはDeployment Engineが直前のReleaseへ行う。本書§4の手動の配布手順と「自動CDではない」という記述は、当時の事実として残す。現在の構成は[Architecture §10](../architecture.md#10-ci--build--deployment)、証跡は[CI/CD As-Built 2026-11-19](cicd-as-built-2026-11-19.md)を参照する。
 
 **記録日:** 2026-11-08（JST）
 
