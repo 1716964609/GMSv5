@@ -1,0 +1,176 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release operation
+        required: true
+        default: build
+        type: choice
+        options:
+          - build
+          - publish
+          - deploy
+
+permissions: {}
+
+concurrency:
+  group: gmsv5-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Verified ARM64 Release
+
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'build')
+
+    permissions:
+      contents: read
+
+    uses: ./.github/workflows/build-arm64.yml
+
+  production:
+    name: Publish and Deploy
+    needs: build
+
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.run_attempt == '1' &&
+      (
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish') ||
+        (
+          vars.GMSV5_CD_ENABLED == 'true' &&
+          (github.event_name == 'push' || inputs.mode == 'deploy')
+        )
+      )
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+
+    environment: production
+
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+
+    env:
+      MODE: ${{ github.event_name == 'push' && 'deploy' || inputs.mode }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
+      INSTANCE_ID: ${{ vars.AWS_DEPLOY_INSTANCE_ID }}
+      DOCUMENT_VERSION: ${{ vars.AWS_DEPLOY_DOCUMENT_VERSION }}
+
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Reject stale release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          MAIN_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+
+          test "$GITHUB_SHA" = "$MAIN_SHA"
+
+      - name: Download verified build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release
+
+      - name: Verify artifact before AWS authentication
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH=infra/deployment python3 -B -c '
+          import sys
+          from artifact import verify_manifest
+
+          verify_manifest(sys.argv[1], sys.argv[2])
+          print("CD ARTIFACT VERIFICATION: PASS")
+          ' "$RUNNER_TEMP/release" "$GITHUB_SHA"
+
+      - name: Assume AWS deployment role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          aws-region: ap-northeast-1
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gmsv5-cd-${{ github.run_id }}
+          role-duration-seconds: 3600
+          allowed-account-ids: '180294215932'
+          inline-session-policy: >-
+            ${{ env.MODE == 'publish' &&
+            '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*"}]}' ||
+            '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","ssm:SendCommand","ssm:GetCommandInvocation"],"Resource":"*"}]}' }}
+
+      - name: Publish immutable release
+        run: |
+          set -euo pipefail
+
+          python3 -B infra/deployment/publish.py \
+            "$RELEASE_BUCKET" \
+            "$RUNNER_TEMP/release" \
+            "$GITHUB_SHA"
+
+      - name: Recheck main before deployment
+        if: env.MODE == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          MAIN_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+
+          test "$GITHUB_SHA" = "$MAIN_SHA"
+
+      - name: Execute deployment and wait for result
+        id: execute
+        if: env.MODE == 'deploy'
+        run: |
+          set -euo pipefail
+
+          python3 -B infra/deployment/ssm_executor.py \
+            send \
+            "$INSTANCE_ID" \
+            "$DOCUMENT_VERSION" \
+            "$GITHUB_SHA" \
+            "$RUNNER_TEMP/deployment-result.json"
+
+      - name: Save deployment result
+        if: always() && env.MODE == 'deploy'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deployment-result.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write deployment summary
+        if: always()
+        run: |
+          {
+            echo "## GMS v5 Release"
+            echo ""
+            echo "- Mode: $MODE"
+            echo "- Release: $GITHUB_SHA"
+
+            if [ -f "$RUNNER_TEMP/deployment-result.json" ]; then
+              echo ""
+              echo '```json'
+              cat "$RUNNER_TEMP/deployment-result.json"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
