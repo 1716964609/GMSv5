@@ -2,7 +2,7 @@
 ## Add Observability
 
 **Document Type:** Architecture Design / Target State  
-**Status:** Target Architecture — Phase 0・Phase 1は実装済み、Phase 2〜4は未実装（2026-11-14更新。下記「Implementation Status」を参照）\
+**Status:** Target Architecture — Phase 0・Phase 1は実装済み、Phase 2とPhase 3は一部実装、Phase 4は対象外（2026-11-19更新。下記「Implementation Status — 2026-11-19」を参照）\
 **Created:** 2026-11-12  
 **System:** GMS v5 — Glossary Management System  
 **Scope:** Observability / SRE Operations Infrastructure  
@@ -12,7 +12,50 @@
 
 ---
 
-# Implementation Status — 2026-11-14
+# Implementation Status — 2026-11-19
+
+本書は目標構成（As-To-Be）を定義する。設計本文は2026-11-12の作成時のままであり、**実装済みの範囲はこの節だけが示す**。現在の本番状態の根拠は本書ではなく、[production-state.md](infrastructure/production-state.md)と日付付きAs-Builtである。
+
+この節は、下の「Implementation Status — 2026-11-14」を置き換える。2026-11-14の節は当時の記録として残す。監視は領域ごとに完成度が異なるため、一律に「完成」「未実装」とは書かない。
+
+## Phase別の状態（2026-11-19）
+
+| Phase | 状態 | 根拠 |
+|---|---|---|
+| Phase 0 — Design and Local PoC | 完了（ローカル検証）。変更なし | [Telemetry Schema §10](development/observability/application-instrumentation.md) |
+| Phase 1 — Observability Infrastructure | Application Traces / Metricsについて本番受入PASS。「Observability EC2停止時もGMSは利用可能」の計画的な本番試験と「追加AWSコスト」の記録は引き続き無い。Terraformによる定義は部分的 | [Observability As-Built §11〜§12](infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance) |
+| Phase 2 — Full-Stack Observability | 一部。SQLite MetricsとNode.js Runtime Metricsは本番で確認済み。CloudWatch連携は外部監視のMetricについて実装済み（2026-11-17）。HTTPSのSynthetic確認はLambdaで実装済み（2026-11-17）。Browser RUM（本番無効）、CloudFront Server-Timing、Nginx Timing Log、Production Host Metrics、DNSのSynthetic確認、Logs集中管理、Dashboard A〜Dは未実装 | [production-state.md §3.8、§6](infrastructure/production-state.md)、[Availability As-Built](infrastructure/availability-external-as-built-2026-11-17.md) |
+| Phase 3 — SRE Operations Readiness | 一部。翻訳遅延のSLO（成功翻訳の95%が10秒以内 / Rolling 7d）とAlert Rule、Discord通知、外部Health Monitoring、Runbook 4本は実装済み。7日間の達成実績、失敗率やTelemetry欠損のAlert、Incident Severity設計、計画的なIncident Simulation、Postmortem Templateは未実装 | [Observability As-Built 2026-11-16](infrastructure/observability-as-built-2026-11-16.md)、[Availability As-Built](infrastructure/availability-external-as-built-2026-11-17.md) |
+| Phase 4 — Performance and Automation | 対象外（後続計画）。変更なし | 本書§12 |
+
+## Componentの状態（2026-11-19）
+
+| Component（§3.3） | 状態 |
+|---|---|
+| OpenTelemetry SDK（Application） | 本番で有効（Release `364d0b7`以降） |
+| OpenTelemetry Collector、Grafana Tempo、Grafana | 稼働 |
+| Prometheus | 稼働。実効保持は10日または1GiB（2026-11-16に変更） |
+| OTLP Gateway（Nginx、TLSとToken認証） | 稼働 |
+| Grafana Loki | 未導入 |
+| Alertmanager | 未導入。Alertは**Grafana-managed Alert**で実装した（2026-11-16）。§3.3の想定とは方式が異なる |
+| 通知 | Discord。Grafanaからの経路と、Lambdaからの経路の2つがある |
+| CloudWatch連携 | 一部実装（2026-11-17）。GrafanaのCloudWatch Data SourceでNamespace `GMS/Availability`を読む。EC2 / EBS / CloudFrontの標準Metricの取り込みは未実装 |
+| Synthetic Monitoring | HTTPSは実装済み（Lambda、1分間隔、公開URL）。DNSは未実装。UptimeRobotは未設定 |
+| Spot Lifecycle監視（§5.9） | 実装済み（2026-11-17）。EC2状態変化とSpot警告をEventBridgeで受ける |
+| Browser RUM | コードはあるが本番無効 |
+
+## 本書の範囲外で実装されたもの
+
+次の2つは本書の計画には無い。CI/CDの一部として2026-11-19に実装された。設計は[architecture.md §10、§15](architecture.md#10-ci--build--deployment)、証跡は[CI/CD As-Built](infrastructure/cicd-as-built-2026-11-19.md)にある。
+
+- **Deployment結果の監視：** SSMのCommand状態変化 → EventBridge → Lambda → DynamoDB / CloudWatch（`DeploymentEvents`）/ Discord。開始と成功は本番で確認済み。失敗系の通知は単体テストのみ。Grafana Panelは未追加。
+- **CIでの検証（§11.2）：** Typecheck、Lint、Unit / Integration Tests、Standalone Buildは、CI Quality GateとBuild Workflowで実行している。Standalone Runtime Smoke Test（梱包したReleaseを起動しReadinessを確認する）はBuild Workflowで実行している。Telemetry Schema Validation、Trace Export Smoke Test、Collector Configuration Validationは未実装。Redactionのテストは`test/observability.test.ts`にあり、Applicationテストの一部として実行される。
+
+---
+
+# Implementation Status — 2026-11-14（Historical）
+
+> **Superseded（2026-11-19）：** 以下は2026-11-14時点の状態である。「Phase 3は未着手」「Alertmanager、CloudWatch連携、Synthetic Monitoringは未実装」は、その後の実装で変わった。現在の状態は上の節を読む。
 
 本書は目標構成（As-To-Be）を定義する。設計本文は2026-11-12の作成時のままであり、**実装済みの範囲はこの節だけが示す**。現在の本番状態の根拠は本書ではなく、[production-state.md](infrastructure/production-state.md)と[Observability As-Built](infrastructure/observability-as-built-2026-11-13.md)である。
 
@@ -124,6 +167,8 @@ GMS v5は現在、Next.js Standalone、SQLite、Amazon EC2 Spot、CloudFront、C
 - ユーザー所有の翻訳本文・認証情報をTelemetryへ流出させてはならない。
 - 既存の認証・データベース・翻訳API処理の仕様を維持する。
 - 現行の手動操作を含むDeploymentを、完全自動CDとして扱わない。
+
+> **Superseded（2026-11-19）：** 最後の項目は2026-11-12時点の記述である。2026-11-19から、`main`へのPushで本番へ自動Deploymentする（[architecture.md §10](architecture.md#10-ci--build--deployment)）。§2.1の表の「Deployment | GitHub Actions / S3 / SSM / systemd」は、当時は手動工程を含んでいた。
 
 ---
 
@@ -474,6 +519,8 @@ Cognitoの内部処理をGMSのOpenTelemetry SDKで直接追跡できるとは�
 
 Spot停止時に自動復旧できることは、現時点のAs-Isに含まれない。
 
+> **2026-11-19 注記：** Spot Lifecycleの監視は2026-11-17に実装された。同じInstanceの再起動時に中断したDeploymentを戻すBoot Recoveryは2026-11-19に実装された。Instanceの自動再作成とENI/EBSの再構成は、引き続きAs-Isに含まれない。
+
 Observability導入だけで可用性が改善されたと評価しない。
 
 ---
@@ -769,6 +816,8 @@ Next.js Standalone Build後もInstrumentationsが正常に初期化されるこ�
 
 **As-Isとの差分：** 現行ARM64 Build Workflowは、`npm ci`、Typecheck、Lint、Build、Artifact Packagingを実施するが、単体・結合テスト全体をCI内で実行する構成にはなっていない。追加テストを実装済みとして扱わない。
 
+> **Superseded（2026-11-19）：** 上の段落は2026-11-12時点の記述である。現在はCI Quality GateがPull Requestごとに単体・結合テストを実行し、Build Workflowも実行する。候補ごとの状態は冒頭の「本書の範囲外で実装されたもの」を参照する。
+
 ## 11.3 Responsibility Model
 
 | Responsibility | Conceptual Owner |
@@ -839,6 +888,8 @@ Tasks:
 
 **Status（2026-11-14）：** 一部のみ実装。大半は未実装。
 
+**Status（2026-11-19）：** 一部実装。HTTPSのSynthetic確認と、外部監視MetricのCloudWatch連携が加わった。詳細は冒頭の「Implementation Status — 2026-11-19」。
+
 **Goal:** BrowserからDatabaseおよび外部APIまでを統合する。
 
 Tasks:
@@ -864,6 +915,8 @@ Tasks:
 ## Phase 3 — SRE Operations Readiness
 
 **Status（2026-11-14）：** 未着手。
+
+**Status（2026-11-19）：** 一部実装。SLOとAlert Rule、Discord通知、External Health Monitoring、Runbookが加わった。詳細は冒頭の「Implementation Status — 2026-11-19」。
 
 **Goal:** 観測データを信頼性運用へ利用する。
 
@@ -989,6 +1042,14 @@ PoC・性能測定・コスト試算・Security Reviewの証跡に基づいて�
 | OD-08 | Prometheusは3日または512MB、Tempoは24時間。Logsは対象なし | Observability As-Built §4.2、§11.1 |
 | OD-09〜OD-13 | 変更なし（未決定または保留） | — |
 
+> **2026-11-19 注記：** その後の実装で、次の項目に事実が加わった。Closeするかどうかは引き続きOwnerが判断する。
+>
+> | ID | その後に採用された構成 | 根拠 |
+> |---|---|---|
+> | OD-08 | Prometheusの実効保持は10日または1GiB。Tempoは24時間のまま | [Observability As-Built 2026-11-16](infrastructure/observability-as-built-2026-11-16.md) |
+> | OD-11 | 成功したサーバー側翻訳の95%以上が10秒以内 / Rolling 7dを、Pilotとして運用中。7日間の達成実績は未判定 | 同上 |
+> | OD-12 | Discord。Grafana Alertと、外部監視のLambdaから通知する | 同上、[Availability As-Built](infrastructure/availability-external-as-built-2026-11-17.md) |
+
 ---
 
 # 15. Definition of Done
@@ -1033,6 +1094,16 @@ Observability Architectureの導入完了は、ツールのインストールだ
 
 根拠は[production-state.md](infrastructure/production-state.md)にまとめてある。
 
+> **2026-11-19 注記：** 上の表のうち、その後に状況が変わった行は次のとおりである。ほかの行は変わっていない。
+>
+> | 条件 | 状況（2026-11-19） |
+> |---|---|
+> | DNS / HTTPS Synthetic Monitoring | 一部。HTTPSはLambdaで実装済み。DNSは未実装 |
+> | Grafana Dashboard 4種類 | 未充足。Dashboard A〜Dは無い。別に、翻訳SLO（4 Panel）と外部Availability（3 Panel）のDashboardがある |
+> | Observability障害がProductionを停止させない | 一部。2026-11-16と11-17にObservability EC2がSpotで停止した記録があるが、その間のProductionの継続を確認した記録は無い。計画的な本番試験も無い |
+> | 主要な障害を観測データから説明できる | 一部。Spot中断は、EventBridgeの記録と停止から復旧までの値で説明できる（2026-11-17）。翻訳の失敗やTelemetry欠損は対象外 |
+> | 実装結果のAs-Built反映 | 充足（2026-11-16、11-17、11-19のAs-Builtを追加） |
+
 ---
 
 # 16. Architecture Governance
@@ -1071,6 +1142,9 @@ Architecture As-Isは現在の実態を記録し、Architecture As-To-Beは将�
 - [Application Instrumentation — Local Verification and SRE Handoff (2026-11-13)](development/observability/application-instrumentation-verification-2026-11-13.md) — ローカル検証の記録（Historical）
 - [Application Observability — Production Release Readiness (2026-11-13)](development/observability/application-release-readiness-2026-11-13.md) — Release前の判定と手順（Historical。対象Releaseは本番稼働中）
 - [Observability Infrastructure As-Built (2026-11-13)](infrastructure/observability-as-built-2026-11-13.md) — §12が2026-11-14の本番受入記録
+- [Observability / Translation SLO / Discord Alerting As-Built (2026-11-16)](infrastructure/observability-as-built-2026-11-16.md)
+- [External Availability and Spot Event Monitoring As-Built (2026-11-17)](infrastructure/availability-external-as-built-2026-11-17.md)
+- [CI/CD and Automatic Rollback As-Built (2026-11-19)](infrastructure/cicd-as-built-2026-11-19.md) — Deployment結果の監視を含む
 
 **Technical References**
 
@@ -1084,6 +1158,6 @@ Architecture As-Isは現在の実態を記録し、Architecture As-To-Beは将�
 
 **End of Document**
 
-**Status: Architecture As-To-Be / Target Architecture — Phase 0・Phase 1実装済み、Phase 2〜4未実装（2026-11-14）**
+**Status: Architecture As-To-Be / Target Architecture — Phase 0・Phase 1実装済み、Phase 2・Phase 3は一部実装、Phase 4は対象外（2026-11-19）**
 
 実装開始前に未決定事項を解消し、各Phaseの受入条件を確認すること。

@@ -15,6 +15,8 @@
 > - §8のRollback手順は引き続き参照できる。
 >
 > 現在の本番状態は[production-state.md](../../infrastructure/production-state.md)を正とする。
+>
+> **Historical（2026-11-19追記）：** 上の2026-11-14の注記にある「現在の本番Releaseは`364d0b7`」「`9783463`はRollback用に保持」も、その時点の記述である。§6の手動のDeployment手順と§8.3のRelease切り戻し手順（R2）は、2026-11-19の自動Deployment導入で**Superseded**となった。現在の手順は[CI/CD Operations Runbook](../../infrastructure/cicd-operations-runbook.md)を参照する。§8.2のTelemetryのみの無効化は、引き続き参照できる。
 
 ---
 

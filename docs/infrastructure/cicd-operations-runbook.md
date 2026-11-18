@@ -1,5 +1,18 @@
 # GMS v5 — CI/CD Operations Runbook
 
+- **Owner:** Infrastructure / SRE
+- **Updated:** 2026-11-19 JST
+- **Status:** Automatic production deployment is enabled
+  (`GMSV5_CD_ENABLED=true`).
+- **Evidence:** [CI/CD As-Built 2026-11-19](cicd-as-built-2026-11-19.md)
+- **Design and diagrams:** [Architecture §10](../architecture.md#10-ci--build--deployment)
+- **Current state:** [Production State](production-state.md)
+
+> Every merge into main starts a real production deployment while the
+> gate is enabled. This includes documentation-only merges: the CD
+> workflow has no path filter. Disable the gate first if a merge must
+> not deploy.
+
 ## Normal deployment
 
 A pull request must pass CI Quality Gate before merging into main.
@@ -15,6 +28,14 @@ Expected terminal result:
 - SSM_STATUS=Success OUTCOME=SUCCEEDED
 - DEPLOYMENT_LOCK_RELEASED
 - Public HTTPS: HTTP 200
+
+If the requested commit is already the active release, the engine logs
+ALREADY_DEPLOYED and reports SUCCEEDED without switching or restarting.
+
+A release whose database schema fingerprint differs from the active
+release is rejected before switching (outcome 10). Such a release needs
+an operator-planned deployment; the automatic path does not run
+database migrations.
 
 ## Deployment modes
 
@@ -136,6 +157,22 @@ Do not automatically restore an older database over live data.
 - Filter CloudWatch metrics by Target outcome in Grafana.
 - Distinguish deployment failures from EC2 Spot availability events.
 
+Deployment events share the Lambda function, DynamoDB table and
+CloudWatch namespace of the external availability monitor, but use
+their own record key (`deployment#<instance>`) and their own metric
+(`DeploymentEvents`, with the outcome in the `Target` dimension). See
+[External Availability Runbook](availability-external-runbook.md) for
+the shared components.
+
+Verified in production (2026-11-19): started and succeeded events in
+DynamoDB and CloudWatch, and started and succeeded Discord messages for
+two deployments. Not verified in production: Discord delivery for the
+failure outcomes, which have unit-test coverage only.
+
+No deployment panel exists in Grafana yet. Query `DeploymentEvents`
+through the existing CloudWatch datasource until one is added and
+verified.
+
 ## Engine maintenance
 
 Deployment engine files are root-owned.
@@ -155,3 +192,13 @@ Preserve a healthy baseline and compatible previous release.
 - Notification delivery is best-effort.
 - Actual AWS Spot reclamation and full authenticated application
   functionality are outside the controlled recovery acceptance test.
+- Single-instance production architecture.
+- A changed database migration fingerprint blocks automatic deployment.
+- Deployment engine installation and updates are operator-controlled.
+- Boot recovery restores the application release on the same instance.
+  It does not replace an instance or rebuild its ENI or EBS volumes.
+- The rollback acceptance injected a controlled readiness failure. The
+  boot recovery acceptance used a real OS reboot with a simulated
+  interrupted transaction.
+- The measured durations in the As-Built are process durations, not
+  service downtime, an RTO or an SLO.
