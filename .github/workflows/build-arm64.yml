@@ -2,10 +2,24 @@ name: Build ARM64 Release
 
 on:
   workflow_dispatch:
+  workflow_call:
+    outputs:
+      artifact_name:
+        description: Verified ARM64 release artifact
+        value: ${{ jobs.build.outputs.artifact_name }}
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+    env:
+      GMS_BUILD_SHA: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +34,15 @@ jobs:
           npm ci
           npm run typecheck
           npm run lint
+          npm test
+          python3 -B -m unittest discover -s infra/deployment/tests -p 'test_*.py' -v
           npm run build
 
       - name: Package standalone
+        id: package
         run: |
+          echo "artifact_name=gmsv5-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
           test -f .next/standalone/server.js
 
           mkdir -p .next/standalone/.next
@@ -39,11 +58,73 @@ jobs:
           sha256sum gmsv5-linux-arm64.tar.gz \
             > gmsv5-linux-arm64.tar.gz.sha256
 
+      - name: Generate and verify release manifest
+        run: python3 -B infra/deployment/artifact.py create . "$GMS_BUILD_SHA"
+
+      - name: Verify packaged release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_DIR="$(mktemp -d)"
+          SERVER_PID=""
+
+          cleanup() {
+            if [ -n "$SERVER_PID" ]; then
+              kill "$SERVER_PID" 2>/dev/null || true
+              wait "$SERVER_PID" 2>/dev/null || true
+            fi
+            rm -rf "$TEST_DIR"
+          }
+
+          trap cleanup EXIT
+
+          mkdir "$TEST_DIR/releases"
+
+          python3 -B infra/deployment/stage.py \
+            "$TEST_DIR" . "$GMS_BUILD_SHA"
+
+          DB_PATH="$TEST_DIR/test.sqlite"
+
+          GMS_DATABASE_PATH="$DB_PATH" NODE_ENV=production \
+            node --experimental-strip-types scripts/migrate.ts
+
+          env -i \
+            PATH="$PATH" \
+            HOME="$HOME" \
+            NODE_ENV=production \
+            GMS_DATABASE_PATH="$DB_PATH" \
+            GMS_OTEL_ENABLED=false \
+            GMS_BUILD_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+            HOSTNAME=127.0.0.1 \
+            PORT=33117 \
+            node "$TEST_DIR/releases/$GMS_BUILD_SHA/server.js" &
+
+          SERVER_PID=$!
+
+          for i in $(seq 1 30); do
+            echo "Waiting for application startup: attempt $i/30"
+            if curl -fsS --max-time 2 \
+              http://127.0.0.1:33117/api/health/live; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS --max-time 5 \
+            http://127.0.0.1:33117/api/health/ready \
+            > "$TEST_DIR/readiness.json"
+
+          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"] == "ready" and r["release"] == sys.argv[2], r; print(r)' "$TEST_DIR/readiness.json" "$GMS_BUILD_SHA"
+
+          echo "PACKAGED ARM64 RELEASE: PASS"
+
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gmsv5-linux-arm64
+          name: ${{ steps.package.outputs.artifact_name }}
           path: |
             gmsv5-linux-arm64.tar.gz
             gmsv5-linux-arm64.tar.gz.sha256
+            manifest.json
           retention-days: 7

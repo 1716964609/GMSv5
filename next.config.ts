@@ -26,6 +26,9 @@ const privateHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  env: {
+    GMS_BUILD_SHA: process.env.GMS_BUILD_SHA ?? "unknown",
+  },
   poweredByHeader: false,
 
   async headers() {

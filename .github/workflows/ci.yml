@@ -1,0 +1,66 @@
+name: CI Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-24.04-arm
+    env:
+      GMS_BUILD_SHA: ${{ github.sha }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Deployment engine tests
+        run: python3 -B -m unittest discover -s infra/deployment/tests -p 'test_*.py' -v
+
+      - name: Availability and deployment monitoring tests
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          python3.12 -m venv "$RUNNER_TEMP/availability-tests"
+
+          "$RUNNER_TEMP/availability-tests/bin/python" -m pip install \
+            -r infra/terraform/availability/requirements-test.txt
+
+          "$RUNNER_TEMP/availability-tests/bin/python" -B -m unittest discover \
+            -s infra/terraform/availability/tests \
+            -p 'test_*.py' -v
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify standalone output
+        run: test -f .next/standalone/server.js

@@ -1,0 +1,15 @@
+[Unit]
+Description=GMS v5 verify recovered application release
+Requires=gmsv5-boot-prepare.service
+Wants=gmsv5.service
+After=gmsv5-boot-prepare.service gmsv5.service
+
+[Service]
+Type=oneshot
+User=root
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/bin/python3 -B /opt/gmsv5/deploy/state.py lock /var/lib/gmsv5-deploy /usr/bin/python3 -B /opt/gmsv5/deploy/boot_recovery.py verify
+
+[Install]
+WantedBy=multi-user.target

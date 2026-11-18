@@ -1,0 +1,49 @@
+name: Verify AWS OIDC
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify:
+    name: AWS OIDC Authentication
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    environment: production
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Assume deployment IAM role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-1
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gmsv5-oidc-${{ github.run_id }}
+          role-duration-seconds: 900
+          allowed-account-ids: '180294215932'
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Deny","NotAction":"sts:GetCallerIdentity","Resource":"*"}]}
+
+      - name: Verify assumed role identity
+        run: |
+          set -euo pipefail
+
+          aws sts get-caller-identity --output json |
+          python3 -c '
+          import json, sys
+
+          identity = json.load(sys.stdin)
+
+          assert identity["Account"] == "180294215932"
+          assert identity["Arn"].startswith(
+              "arn:aws:sts::180294215932:assumed-role/gmsv5-github-deploy-role/"
+          )
+
+          print(json.dumps(identity, indent=2))
+          print("AWS OIDC AUTHENTICATION: PASS")
+          '
