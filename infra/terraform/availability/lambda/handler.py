@@ -458,6 +458,17 @@ def handler(event: dict, context=None):
         if available and read_state(cfg["app"]).get("ec2_state") == "running":
             complete_incident(cfg["app"], recovery_at=timestamp(now_utc()), proof="http200")
         return {"http_up": available}
+    if event.get("source") == "aws.ssm":
+        from deployment import handle
+
+        return handle(
+            event,
+            app=cfg["app"],
+            ssm=ssm(),
+            save=save_event,
+            notify=notify,
+            metric=metric,
+        )
     if event.get("source") == "aws.ec2":
         return handle_ec2(event, context)
     return {"ignored": "unsupported source"}

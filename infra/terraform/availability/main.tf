@@ -19,7 +19,8 @@ data "aws_caller_identity" "current" {}
 # Package Python code as a deterministic Lambda deployment artifact.
 data "archive_file" "lambda" {
   type        = "zip"
-  source_file = "${path.module}/lambda/handler.py"
+  source_dir  = "${path.module}/lambda"
+  excludes    = ["__pycache__"]
   output_path = "${path.module}/lambda-package.zip"
 }
 
