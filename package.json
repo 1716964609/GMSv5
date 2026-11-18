@@ -22,7 +22,8 @@
     "test:usecases": "node --experimental-strip-types --test test/use-cases.test.ts",
     "test:browserless": "node --experimental-strip-types --test test/browserless.test.ts",
     "test:observability": "node --experimental-strip-types --test test/observability.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
