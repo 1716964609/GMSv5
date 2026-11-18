@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import tarfile
 import tempfile
@@ -59,6 +60,41 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(
             (self.destination / "server.js").read_bytes(),
             b"test",
+        )
+
+    def test_restrictive_umask(self):
+        self.make_archive([
+            ("node_modules/next/package.json", tarfile.REGTYPE, ""),
+            ("bin/server", tarfile.SYMTYPE, "../server.js"),
+        ])
+
+        previous = os.umask(0o077)
+
+        try:
+            self.extract()
+        finally:
+            os.umask(previous)
+
+        for directory in (
+            self.destination,
+            self.destination / ".next",
+            self.destination / "node_modules",
+            self.destination / "node_modules/next",
+            self.destination / "bin",
+        ):
+            self.assertEqual(
+                directory.stat().st_mode & 0o777,
+                0o755,
+            )
+
+        self.assertEqual(
+            (self.destination / "node_modules/next/package.json")
+            .stat().st_mode & 0o777,
+            0o644,
+        )
+
+        self.assertTrue(
+            (self.destination / "bin/server").is_symlink()
         )
 
     def test_path_traversal(self):
