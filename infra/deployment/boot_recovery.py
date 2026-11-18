@@ -164,6 +164,17 @@ def main():
         config["data_filesystem_uuid"]
     )
 
+    if sys.argv[1] == "guard":
+        active = state.current_release(ROOT)
+
+        preflight.trusted_path(
+            ROOT / "releases" / active,
+            directory=True,
+        )
+
+        print(f"STARTUP GUARD: PASS release={active}")
+        return 0
+
     if sys.argv[1] == "prepare":
         prepare(ROOT, STATE_DIR)
         return 0

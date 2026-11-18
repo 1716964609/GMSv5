@@ -46,6 +46,19 @@ jobs:
       - name: Deployment engine tests
         run: python3 -B -m unittest discover -s infra/deployment/tests -p 'test_*.py' -v
 
+      - name: Availability and deployment monitoring tests
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          python3.12 -m venv "$RUNNER_TEMP/availability-tests"
+
+          "$RUNNER_TEMP/availability-tests/bin/python" -m pip install \
+            -r infra/terraform/availability/requirements-test.txt
+
+          "$RUNNER_TEMP/availability-tests/bin/python" -B -m unittest discover \
+            -s infra/terraform/availability/tests \
+            -p 'test_*.py' -v
+
       - name: Production build
         run: npm run build
 

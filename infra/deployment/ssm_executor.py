@@ -210,7 +210,7 @@ def poll(report, path, timeout=POLL_TIMEOUT):
     return 22
 
 
-def execute(instance, version, sha, path):
+def execute(instance, version, sha, path, request_id=None):
     validate_target(instance, version, sha)
 
     path = Path(path)
@@ -220,7 +220,10 @@ def execute(instance, version, sha, path):
             "Report already exists; do not resubmit"
         )
 
-    request_id = uuid.uuid4().hex
+    request_id = request_id or uuid.uuid4().hex
+
+    if not re.fullmatch(r"[a-f0-9]{32}", request_id):
+        raise ValueError("Invalid request ID")
 
     report = {
         "version": 1,

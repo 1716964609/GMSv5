@@ -16,6 +16,7 @@ on:
           - build
           - publish
           - deploy
+          - deploy-published
 
 permissions: {}
 
@@ -28,8 +29,9 @@ jobs:
     name: Build Verified ARM64 Release
 
     if: >-
-      github.ref == 'refs/heads/main' ||
-      (github.event_name == 'workflow_dispatch' && inputs.mode == 'build')
+      (github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'build')) &&
+      inputs.mode != 'deploy-published'
 
     permissions:
       contents: read
@@ -41,13 +43,21 @@ jobs:
     needs: build
 
     if: >-
+      always() && !cancelled() &&
       github.ref == 'refs/heads/main' &&
       github.run_attempt == '1' &&
+      (
+        needs.build.result == 'success' ||
+        (
+          inputs.mode == 'deploy-published' &&
+          needs.build.result == 'skipped'
+        )
+      ) &&
       (
         (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish') ||
         (
           vars.GMSV5_CD_ENABLED == 'true' &&
-          (github.event_name == 'push' || inputs.mode == 'deploy')
+          (github.event_name == 'push' || inputs.mode == 'deploy' || inputs.mode == 'deploy-published')
         )
       )
 
@@ -86,12 +96,14 @@ jobs:
           test "$GITHUB_SHA" = "$MAIN_SHA"
 
       - name: Download verified build artifact
+        if: env.MODE != 'deploy-published'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build.outputs.artifact_name }}
           path: ${{ runner.temp }}/release
 
       - name: Verify artifact before AWS authentication
+        if: env.MODE != 'deploy-published'
         run: |
           set -euo pipefail
 
@@ -114,9 +126,10 @@ jobs:
           inline-session-policy: >-
             ${{ env.MODE == 'publish' &&
             '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*"}]}' ||
-            '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","ssm:SendCommand","ssm:GetCommandInvocation"],"Resource":"*"}]}' }}
+            '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","ssm:SendCommand","ssm:GetCommandInvocation"],"Resource":"*"}]}' }}
 
       - name: Publish immutable release
+        if: env.MODE != 'deploy-published'
         run: |
           set -euo pipefail
 
@@ -125,8 +138,20 @@ jobs:
             "$RUNNER_TEMP/release" \
             "$GITHUB_SHA"
 
+      - name: Verify previously published release
+        if: env.MODE == 'deploy-published'
+        run: |
+          set -euo pipefail
+
+          mkdir "$RUNNER_TEMP/published-release"
+
+          python3 -B infra/deployment/download.py \
+            "$RELEASE_BUCKET" \
+            "$GITHUB_SHA" \
+            "$RUNNER_TEMP/published-release"
+
       - name: Recheck main before deployment
-        if: env.MODE == 'deploy'
+        if: env.MODE == 'deploy' || env.MODE == 'deploy-published'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -138,19 +163,19 @@ jobs:
 
       - name: Execute deployment and wait for result
         id: execute
-        if: env.MODE == 'deploy'
+        if: env.MODE == 'deploy' || env.MODE == 'deploy-published'
         run: |
           set -euo pipefail
 
-          python3 -B infra/deployment/ssm_executor.py \
-            send \
+          python3 -B infra/deployment/deployment_lock.py \
+            "$RELEASE_BUCKET" \
             "$INSTANCE_ID" \
             "$DOCUMENT_VERSION" \
             "$GITHUB_SHA" \
             "$RUNNER_TEMP/deployment-result.json"
 
       - name: Save deployment result
-        if: always() && env.MODE == 'deploy'
+        if: always() && (env.MODE == 'deploy' || env.MODE == 'deploy-published')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployment-result-${{ github.run_id }}-${{ github.run_attempt }}
