@@ -4,16 +4,17 @@
 
 GMS v5 is a multilingual glossary management and AI-assisted translation web application. Users manage their own terminology, select terms for a translation request, and use a two-stage DeepL → OpenAI translation flow with their own API keys.
 
-This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The status below reflects the verified state as of 2026-11-19 JST. It distinguishes measured evidence, operator reports, and unverified items; the evidence is indexed in [Production State](docs/infrastructure/production-state.md). Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
+This repository follows Spec-Driven Development and Simon Martinelli's AI Unified Process (AIUP). The status below reflects the verified state as of 2026-11-20 JST. It distinguishes measured evidence, operator reports, and unverified items; the evidence is indexed in [Production State](docs/infrastructure/production-state.md). Infrastructure descriptions inherited from the October record have not been re-audited against AWS.
 
 To find which document is the source of truth for a given question, and who owns it, start with the [Documentation Map](docs/README.md).
 
 ## Production Status
 
 - Public URL: <https://sunlightjetrans.com>
-- Current application release: `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`, deployed on 2026-11-19 by a push to `main` ([Run 44353371110](https://github.com/1716964609/GMSv5/actions/runs/44353371110)). Later merges replace it automatically
+- Application release: every merge into `main` is deployed automatically, so this README does not pin a commit. The release recorded at the latest milestone is in [Production State §3.1](docs/infrastructure/production-state.md#31-application-release); each deployment's evidence is its [Continuous Deployment run](https://github.com/1716964609/GMSv5/actions/workflows/cd.yml)
 - Delivery: pull requests must pass the CI Quality Gate; a merge into the protected `main` branch builds, publishes and deploys the exact commit to production
 - Recovery: automatic rollback and boot recovery passed acceptance on the production EC2 instance, using controlled failure injection
+- Backup and disaster recovery: daily snapshots of the database EBS volume by Amazon Data Lifecycle Manager (two generations kept) were applied on 2026-11-20; the first scheduled snapshot and retention have not yet been verified. An isolated restore drill from a snapshot verified database integrity, the migration and release readiness, and measured application recovery in 5m08s and functional recovery (sign-in and glossary access) in 7m58s. These are single measurements in an isolated environment without a production cutover, not a guaranteed RTO. The recovery point used was about 267.5 hours old, so the provisional 24-hour RPO target was **not** met. The drill resources have been deleted. See the [DR As-Built](docs/infrastructure/dr-as-built-2026-11-20.md) and the [Disaster Recovery Runbook](docs/infrastructure/disaster-recovery-runbook.md)
 - Observability: server traces and metrics are enabled and verified in production; a translation latency SLO alert, external availability monitoring and deployment outcome monitoring are running; Browser RUM is implemented but disabled
 - Previous releases: `364d0b7` (2026-11-14, the last manually deployed release), `9783463` (2026-11-08), `5f0c6e7`; initial production release `f5fb681` on 2026-10-25
 - Runtime: Amazon Linux 2023 / ARM64 / Node.js 26 / Next.js Standalone
@@ -22,7 +23,7 @@ To find which document is the source of truth for a given question, and who owns
 
 The DeepL IPv4 reachability issue was addressed in release `51cba4a` by adding a dedicated CloudFront Reverse Proxy. OpenAI continues to use the EC2 native IPv6 path.
 
-The Product Owner confirmed the new Lavender LP and successful selection of 10,000 Terms in production. Select All was observed at approximately 27 seconds versus 40 seconds previously (about 32.5% reduction). This is not a controlled p95 comparison; the provisional ≤20-second / ≥50% improvement targets are not met by these observations and formal performance acceptance remains pending. See the [2026-11-08 As-Built](docs/infrastructure/production-as-built-2026-11-08.md).
+The Product Owner confirmed the new Lavender LP and successful selection of 10,000 Terms in production. Select All was observed at approximately 27 seconds versus 40 seconds previously (about 32.5% reduction). This is not a controlled p95 comparison; the provisional ≤20-second / ≥50% improvement targets are not met by these observations and formal performance acceptance remains pending. See the [2026-11-08 As-Built](docs/infrastructure/production-as-built-2026-11-08.md). A controlled benchmark in an isolated environment on 2026-11-20 met both targets with four fetch workers ([CR-01 §13](docs/design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)); that setting has not been deployed to production. The same investigation found that the public domain is served through a distant CloudFront edge; no DNS change has been made.
 
 Release `364d0b7` added OpenTelemetry instrumentation to the application. The application sends server traces and metrics over authenticated OTLP/HTTPS to a separate observability EC2 instance running an OTLP gateway, OpenTelemetry Collector, Tempo, Prometheus and Grafana. In the [Phase 1 acceptance record](docs/infrastructure/observability-as-built-2026-11-13.md#12-production-phase-1-acceptance), a production translation request was observed at about 6.87 seconds, with DeepL at about 3.22 seconds and OpenAI post-editing at about 3.64 seconds. That is a single observation, not a baseline or an SLO. Since then a pilot SLO alert (95% of successful translations within 10 seconds over a rolling 7 days) and Discord notification have been verified, but seven days of attainment have not been established. Centralized logs, edge monitoring and backup of the observability host are not complete, and that host is only partly reproducible from Terraform.
 
@@ -239,6 +240,8 @@ A change to application code does not touch `infra/`, and an infrastructure chan
 | [Production State](docs/infrastructure/production-state.md) | Current production state: measured results, Terraform scope, manual configuration, unimplemented items |
 | [CI/CD As-Built 2026-11-19](docs/infrastructure/cicd-as-built-2026-11-19.md) | Production acceptance evidence for CI/CD, automatic rollback, boot recovery and deployment monitoring |
 | [CI/CD Operations Runbook](docs/infrastructure/cicd-operations-runbook.md) | Deployment operations, outcome codes, lock handling |
+| [DR As-Built 2026-11-20](docs/infrastructure/dr-as-built-2026-11-20.md) | Evidence for the DLM backup policy, the isolated restore drill (RPO / RTO), the CR-01 benchmark and the DNS / CDN investigation |
+| [Disaster Recovery Runbook](docs/infrastructure/disaster-recovery-runbook.md) | Restore from snapshot, database verification, cleanup, daily backup checks |
 | [Development documentation](docs/development/README.md) | Application scope, design records, application observability |
 | [Telemetry Schema v1](docs/development/observability/application-instrumentation.md) | Spans, metrics, attributes, configuration and redaction |
 | [Infrastructure documentation](docs/infrastructure/README.md) | Infrastructure scope, evidence rules, As-Built index |
@@ -264,17 +267,20 @@ Deployment and recovery:
 - Rollback and boot recovery under real failures. The acceptance injected a controlled readiness failure, and used a real OS reboot with a simulated interrupted transaction rather than an actual Spot capacity reclamation
 - Discord delivery for failed deployments. Delivery was verified for started and succeeded deployments; failure outcomes are covered by unit tests. Notification is best-effort
 - A deployment panel in Grafana. Deployment metrics exist in CloudWatch
+- Verified execution and retention of the scheduled DLM snapshots, and alerting on backup failure
+- The 24-hour RPO target, production disaster-recovery cutover, and recovery to another region or account. The drill restored to an isolated environment only; its timings are single measurements, not a guaranteed production RTO
 
 Observability:
 
 - Browser RUM in production
 - Centralized logs, edge monitoring (CloudFront, Nginx, DNS) and production host metrics
+- A fix for the distant CloudFront edge selected for the public domain (the cause is a hypothesis; DNS has not been changed)
 - Seven days of measured SLO attainment, and separate alerts for failure rate or missing telemetry
 - Backups of the observability host and full Terraform reproducibility of it (containers, configuration and certificates were set up manually)
 
 Application acceptance:
 
-- Formal 1/2/4 concurrency performance comparison and achievement of the provisional p95 targets
+- Formal 1/2/4 concurrency performance acceptance in production. The provisional p95 targets were met only in an isolated benchmark, and the four-worker setting is not deployed
 - Comprehensive production E2E, zero-term translation and confirmed temporary glossary cleanup. Authenticated E2E and translation were also not revalidated during the CI/CD acceptance
 - Execution logs of the production schema migration. That the migrations are applied is confirmed indirectly, because the readiness check compares them and passes in production
 

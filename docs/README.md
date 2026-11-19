@@ -1,20 +1,20 @@
 # GMS v5 — Documentation Map / Source of Truth
 
-- **基準日:** 2026-11-19（JST）
+- **基準日:** 2026-11-20（JST）
 - **対象Branch:** `main`
 - **文書種別:** 文書全体の案内。何がSource of Truthで、誰が責任を持ち、どの順に読むかを定める
 
 GMS v5は1つのRepository（Monorepo）で開発している。本書は、その中の**Development**（Application）と**Infrastructure**（AWS・ホスト・監視基盤）の責任範囲を分け、将来Infrastructureを別Repositoryへ移せる形に文書を整理する。
 
-> 本書は案内であり、証跡ではない。本番の変更と検証結果は日付付きAs-Builtに記録する。最新は[CI/CD As-Built 2026-11-19](./infrastructure/cicd-as-built-2026-11-19.md)である。
+> 本書は案内であり、証跡ではない。本番の変更と検証結果は日付付きAs-Builtに記録する。最新は[DR As-Built 2026-11-20](./infrastructure/dr-as-built-2026-11-20.md)（Backup、隔離DR演習、性能、DNS / CDN）、CI/CDについては[CI/CD As-Built 2026-11-19](./infrastructure/cicd-as-built-2026-11-19.md)である。
 >
 > **`main`へのMergeは本番Deploymentを起動する。** 自動CDが有効な間（`GMSV5_CD_ENABLED=true`）、文書だけの変更でも同じである。文書の編集そのものは本番を変えないが、そのMergeは本番を変える。
 
-## 1. 現在の状態（2026-11-19）
+## 1. 現在の状態（2026-11-20）
 
 | 項目 | 状態 |
 |---|---|
-| 本番Application Release | `53ece4d`（2026-11-19、`main`へのPushによる自動Deployment） |
+| 本番Application Release | `57b9141`（PR #8＝文書のみのMergeによる自動Deployment。2026-11-20のDR演習前後に確認）。CI/CD受入時点は`53ece4d` |
 | CI | Pull Requestで起動するQuality Gate。`main`へのMergeに必須 |
 | CD | `main`へのPushで本番へ自動Deployment。有効 |
 | Automatic Rollback / Boot Recovery | 本番EC2で受入PASS（制御した障害注入による試験） |
@@ -27,6 +27,10 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | Logs集中管理、Edge監視（CloudFront / Nginx / DNS）、Telemetry欠損監視 | 未完成 |
 | 無停止Deployment、DBの自動Rollback、Instanceの自動再作成 | 未実装 |
 | InfrastructureのTerraform再現性 | 部分的。ホスト上の構成とDeployment Engineの導入は手動 |
+| Data EBSのBackup（DLM） | 日次Snapshot・2世代保持をApply済み、ENABLED。初回Snapshotの作成とRetentionは未確認 |
+| 災害復旧 | Snapshotから隔離環境への復元を実測（Application 308秒、Functional 478秒）。RPO 24hはFAIL（復旧点約267.5h）。DR資源は削除済み。本番Cutoverは未検証 |
+| CR-01の性能（FR-734） | 隔離環境のBenchmarkでWorker 4がp95 4.4573秒・逐次比61.25%短縮。本番への適用と正式受入は未実施 |
+| 公開経路（DNS / CDN） | 独自Domain経由で遠方のCloudFront Edgeを観測。原因は仮説段階、DNS移行は未実施 |
 
 詳細と現在状態の要約は[infrastructure/production-state.md](./infrastructure/production-state.md)にある。この表と食い違う場合はそちらを正とする。
 
@@ -51,6 +55,10 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | 本番へどう配布し、どう切り戻すか | `.github/workflows/cd.yml`、`infra/deployment/`、[architecture.md §10](./architecture.md#10-ci--build--deployment) | Infrastructure |
 | CI/CDが本番で何を確認済みか | [infrastructure/cicd-as-built-2026-11-19.md](./infrastructure/cicd-as-built-2026-11-19.md) | Infrastructure |
 | Deploymentをどう運用するか | [infrastructure/cicd-operations-runbook.md](./infrastructure/cicd-operations-runbook.md) | Infrastructure |
+| Backup Policyとして何を宣言しているか | `infra/terraform/v5/backup.tf` | Infrastructure |
+| Backupと復旧が実際にどこまで確認済みか（RPO / RTO、DB検証、Cleanup） | [infrastructure/dr-as-built-2026-11-20.md](./infrastructure/dr-as-built-2026-11-20.md) | Infrastructure |
+| 障害時にどう復旧するか | [infrastructure/disaster-recovery-runbook.md](./infrastructure/disaster-recovery-runbook.md) | Infrastructure |
+| CR-01の性能を隔離環境でどう測り、何が出たか | [infrastructure/dr-as-built-2026-11-20.md §7](./infrastructure/dr-as-built-2026-11-20.md#7-cr-01--controlled-select-all-benchmark)（詳細）、[design/cr-01-parallel-fetch-design.md §13](./design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)（設計上の判断） | Infrastructure / Development |
 | Applicationが配布可能かをどう判定するか | `src/app/api/health/`、`src/lib/health/`（Readinessの契約。§4.3） | Development |
 | 監視基盤をどこまで作る計画か | [architecture-as-to-be-add-observability.md](./architecture-as-to-be-add-observability.md)（As-To-Be） | Infrastructure / SRE |
 
@@ -176,6 +184,7 @@ docs/
 │   ├── production-state.md                     現在の本番状態（要約）
 │   ├── *-as-built-YYYY-MM-DD.md                日付付きの証跡
 │   ├── cicd-operations-runbook.md              Deploymentの運用
+│   ├── disaster-recovery-runbook.md            Snapshotからの復旧とBackupの確認
 │   ├── availability-external-runbook.md        外部Availability監視の運用
 │   ├── spot-interruption-runbook.md            Spot中断の調査と復旧確認
 │   └── observability/                          SLOとAlertの運用
@@ -193,6 +202,8 @@ docs/
    - Applicationの作業：[development/README.md](./development/README.md) → Requirements → Use Cases → Entity Model → 該当する`design/`またはTelemetry Schema → `src/`と`test/`
    - Infrastructureの作業：[infrastructure/README.md](./infrastructure/README.md) → [production-state.md](./infrastructure/production-state.md) → 参照されている日付付きAs-Built → `infra/terraform/`
    - CI/CDの作業：[architecture.md §10](./architecture.md#10-ci--build--deployment) → [CI/CD As-Built](./infrastructure/cicd-as-built-2026-11-19.md) → [CI/CD Runbook](./infrastructure/cicd-operations-runbook.md) → `.github/workflows/`と`infra/deployment/`
+   - Backup・復旧の作業：[production-state.md §3.9](./infrastructure/production-state.md#39-backup--disaster-recovery2026-11-20) → [architecture.md §16](./architecture.md#16-backup-and-recovery) → [DR As-Built](./infrastructure/dr-as-built-2026-11-20.md) → [DR Runbook](./infrastructure/disaster-recovery-runbook.md) → `infra/terraform/v5/backup.tf`
+   - CR-01の性能の作業：[CR-01技術設計](./design/cr-01-parallel-fetch-design.md)（§8の測定計画、§13の結果） → [DR As-Built §7](./infrastructure/dr-as-built-2026-11-20.md#7-cr-01--controlled-select-all-benchmark)（測定条件と生データの所在）
 3. **構成の全体像が要るとき：**[architecture.md](./architecture.md)
 4. **計画を扱うときだけ：**[As-To-Be](./architecture-as-to-be-add-observability.md)
 
@@ -215,6 +226,7 @@ docs/
 | 場面 | すること |
 |---|---|
 | 本番に新しい事実ができた | 日付付きAs-Builtに証跡を書き、`production-state.md`を更新する |
+| Backupや復旧の手順を変える | [DR Runbook](./infrastructure/disaster-recovery-runbook.md)を更新する。実測値はRunbookに書かず、日付付きAs-Builtに書く |
 | 通常のReleaseが自動Deploymentされた | 文書の更新は不要。証跡はGitHub ActionsのRunとDeploymentの記録に残る。構成や受入状態が変わったときだけ、上の行に従う |
 | CI/CDの仕組みを変える | [architecture.md §10](./architecture.md#10-ci--build--deployment)とRunbookを同じ変更で更新する |
 | 仕様を変える | Requirements・Use Casesを先に更新する |
@@ -242,4 +254,7 @@ docs/
 - [Architecture Evolution](./GMS_Architecture_Evolution_v1-v5_fixed.md)のv5は2026-11-08の記録に基づく。§7と§8に2026-11-19の状態を追記した。
 - 本番Deploymentを起動せずに文書だけを`main`へ入れる手段は、現在のWorkflowには無い（CDにPathの絞り込みが無い）。
 - As-To-Beにあった、GitHubの`main`を指すリポジトリ内文書への絶対URLは、相対リンクに直した。Observability As-Builtの§10には、記録時の証跡として`main`を指すURLが残っている。
+- **解消（2026-11-20）：** Repository直下の[README.md](../README.md)と[README.ja.md](../README.ja.md)は、現行Releaseを`53ece4d`と固定して記載し、DLMとDR演習を反映していなかった。両READMEから現行Release SHAの固定記載を外して[production-state.md](./infrastructure/production-state.md)とDeploymentの証跡（GitHub ActionsのRun）を参照する形にし、DLMとDR演習の要約を英日で同じ内容に揃えて追記した。
+- **解消（2026-11-20）：** `production-state.md` §4.1と[infrastructure/README.md](./infrastructure/README.md) §3にあった、`backup.tf`のGit作業状態（未Commit・未Merge）の記載を外した。DR演習終了時点で未追跡だったという日付付きの事実だけを残し、`main`への反映状況はGit履歴で確認する。
+- **解消（2026-11-20）：** [architecture.md §9](./architecture.md#9-persistence-and-process-management)はWALの使用を前提とする書き方だったが、本番のjournal modeは`delete`と観測された（[DR As-Built §2](./infrastructure/dr-as-built-2026-11-20.md#2-initial-state-and-safety-boundaries)）。§9を観測に合わせた。
 - Requirementsの一部には、すでに決定済みの事項が未決定として残っている（認証サービスの選定など）。今回の整理の対象外とした。[README.ja.md](../README.ja.md)の「資料とコードの差異・確認事項」を参照する。
