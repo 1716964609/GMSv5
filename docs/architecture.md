@@ -1,14 +1,14 @@
 # GMS v5 — Production Architecture
 
-**基準日:** 2026-11-19（JST）
+**基準日:** 2026-11-20（JST）
 **状態:** Production Architecture / Implementation Baseline（Architecture As-Is）
-**対象リリース:** `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`（2026-11-19の受入時点。以後は`main`へのMergeごとに自動で更新される）
+**対象リリース:** `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`（2026-11-19のCI/CD受入時点）。2026-11-20のDR演習時点の本番は`57b914136fcea70247336e7bf65160300e47781c`（文書のみのMerge）。以後も`main`へのMergeごとに自動で更新される
 **公開URL:** `https://sunlightjetrans.com`
 **文書の位置付け:** [Documentation Map](README.md)。現在の本番状態の根拠は[production-state.md](infrastructure/production-state.md)
 
 ## 1. 文書の位置付け
 
-本書は本番構成の設計上の説明（Architecture As-Is）である。2026年11月19日のCI/CD本番受入までを反映する。§2〜§9、§11は2026年11月8日のBaseline 1.2（Release `9783463`）の内容を引き継ぐ。§10はCI/CD、Automatic Rollback、Boot Recovery（2026-11-19）、§14はApplicationの計装と監視基盤（2026-11-14〜11-17）、§15はDeploymentの監視（2026-11-19）を扱う。ネットワーク・AWS構成は10月26日の記録を継承し、ライブ環境での再監査は行っていない。
+本書は本番構成の設計上の説明（Architecture As-Is）である。2026年11月20日のBackup Automation（DLM）の適用までを反映する。§2〜§9、§11は2026年11月8日のBaseline 1.2（Release `9783463`）の内容を引き継ぐ。§10はCI/CD、Automatic Rollback、Boot Recovery（2026-11-19）、§14はApplicationの計装と監視基盤（2026-11-14〜11-17）、§15はDeploymentの監視（2026-11-19）、§16はData EBSのBackupと復旧（2026-11-20）を扱う。ネットワーク・AWS構成は10月26日の記録を継承し、ライブ環境での再監査は行っていない。
 
 本書は要約であり、証跡ではない。記載と日付付きAs-Builtが食い違う場合はAs-Builtを正とする。
 
@@ -31,6 +31,8 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 - [Observability As-Built 2026-11-13](infrastructure/observability-as-built-2026-11-13.md) — 監視基盤とPhase 1本番受入の証跡
 - [Observability As-Built 2026-11-16](infrastructure/observability-as-built-2026-11-16.md) — Translation SLO、Discord通知
 - [Availability As-Built 2026-11-17](infrastructure/availability-external-as-built-2026-11-17.md) — 外部Availability監視、Spot Lifecycle監視
+- [DR As-Built 2026-11-20](infrastructure/dr-as-built-2026-11-20.md) — DLMの適用、隔離DR演習のRPO / RTO、CR-01 Benchmark、DNS / CDN調査の証跡
+- [Disaster Recovery Runbook](infrastructure/disaster-recovery-runbook.md) — Snapshotからの復旧手順、DLMの確認
 - [Telemetry Schema v1](development/observability/application-instrumentation.md) — Span、Metric、設定、Redactionの定義
 - [Architecture As-To-Be — Add Observability](architecture-as-to-be-add-observability.md) — 目標構成。未実装の項目を含む
 
@@ -59,6 +61,7 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 | Process | `systemd` / `gmsv5.service`（`/opt/gmsv5/current`から起動） |
 | Database | SQLite |
 | Persistent storage | 暗号化された独立EBS gp3 |
+| Backup | Amazon Data Lifecycle Manager（Data EBSの日次Snapshot、2世代保持。§16） |
 | Public ingress | DreamHost DNS / existing CloudFront / Nginx |
 | DeepL egress | Dedicated CloudFront Reverse Proxy |
 | OpenAI egress | EC2 native IPv6 |
@@ -76,7 +79,7 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 | 外部監視 | EventBridge / Lambda / DynamoDB / CloudWatch（Availability、Spot Lifecycle、Deployment） |
 | 通知 | Discord（Grafana Alert、および外部監視のLambda） |
 
-`main`へのPushで本番を更新する自動CD、Automatic Rollback、Boot Recoveryは2026年11月19日に本番で受入済みである（§10）。翻訳SLOのAlert、外部Availability監視も稼働している（§14）。一方、Instanceの自動再作成とENI/EBSの再構成、無停止Deployment、DBの自動Rollback、Logs集中管理は、現在のProduction Architectureに実装済みの構成として扱わない（§12）。
+`main`へのPushで本番を更新する自動CD、Automatic Rollback、Boot Recoveryは2026年11月19日に本番で受入済みである（§10）。翻訳SLOのAlert、外部Availability監視も稼働している（§14）。Data EBSの日次Snapshot（DLM）は2026年11月20日に適用した（§16。初回の実行は未確認）。一方、Instanceの自動再作成とENI/EBSの再構成、無停止Deployment、DBの自動Rollback、本番の災害復旧Cutover、Logs集中管理は、現在のProduction Architectureに実装済みの構成として扱わない（§12）。
 
 ## 4. Ingress — 既存Web公開経路
 
@@ -104,6 +107,8 @@ flowchart LR
 - Node.jsの3000番とNginxの8080番は外部公開しない。
 
 CloudFrontからEC2へのOrigin接続は、IPv6 Prefix ListによるSecurity Group制限と、Nginxの専用Origin認証ヘッダーを併用する。HTTPレスポンスのCloudFrontキャッシュは無効化している。
+
+DreamHostのApex RecordはCloudFront標準DomainへのALIASである。2026-11-20の調査では、独自Domain経由で米国のEdge（`HIO52-P2`）が選ばれ、東京のEdgeより外部から見たTTFBが大きかった。原因はDreamHostのALIAS flatteningによるという仮説の段階で、DNS移行などの修正は行っていない。本節の構成は変わっていない。状態は[Production State §3.10](infrastructure/production-state.md#310-公開経路の性能dns--cdn2026-11-20)、証跡は[DR As-Built §8](infrastructure/dr-as-built-2026-11-20.md#8-production-latency-investigation--dns--cdn)にある。
 
 ### 4.2 IPv6-first制約
 
@@ -227,7 +232,8 @@ BYO初期表示はGlossary一覧、展開は最初のTermページ、以後は�
 ## 9. Persistence and Process Management
 
 - Production Database：`/mnt/gms-data/gmsv5.sqlite`
-- SQLite、WAL、関連ファイルは独立EBS gp3へ保存する。
+- SQLiteのDBと関連ファイル（Journal。WALを使う場合はWAL / SHM）は独立EBS gp3へ保存する。2026-11-20の読み取り調査では、本番のjournal modeは`delete`だった（WALではない）。
+- Data EBSはDLMで日次Snapshotを取得する（§16）。
 - EBS未マウント時にルートボリュームへ新しいDBを作成して起動しない。
 - `gmsv5.service`がNext.js Standaloneを`127.0.0.1:3000`で起動する。作業Directoryは`/opt/gmsv5/current`で、Deployment Engineが管理するReleaseを指す（§10.3）。
 - 起動前に`gmsv5-boot-prepare.service`と起動Guardが、Data Volumeのマウント（Filesystem UUID）とReleaseの配置を確認する（§10.6）。
@@ -508,8 +514,9 @@ Boot Recoveryは、**同じInstanceが再起動したとき**のApplicationの�
 - 更新：Amazon Linuxのsystemd timer
 - 更新後：Nginx構文検証とreload hook
 - アカウント恒久削除：期限超過分を冪等に処理する内部定期処理
+- Data EBSのSnapshot：DLMが毎日19:00 UTC（04:00 JST）を基準に作成し、Policy管理分を2世代保持（§16）
 
-証明書更新、アカウント削除、Spot停止後の復旧について、実装済みの自動化範囲を超えて成功を保証しない。Spot停止後の復旧のうち実装済みなのは、同じInstanceの再起動時のBoot Recovery（§10.6）までである。
+証明書更新、アカウント削除、DLMのSnapshot、Spot停止後の復旧について、実装済みの自動化範囲を超えて成功を保証しない。Spot停止後の復旧のうち実装済みなのは、同じInstanceの再起動時のBoot Recovery（§10.6）までである。
 
 ## 12. Production Boundaries and Open Items
 
@@ -525,27 +532,34 @@ Deployment・復旧：
 - 実際のSpot容量回収中に中断したDeploymentの復旧確認、実際の不具合ReleaseでのRollback確認
 - 失敗系Deploymentの通知の本番着信確認（単体テストのみ）、Deployment用のGrafana Panel
 
+Backup・災害復旧：
+
+- DLMによる初回Snapshotの作成・Retentionの確認、DLM失敗の監視、定期的なRestore Drill
+- 24h RPOの達成（2026-11-20の演習ではFAIL）。SQLite Online Backupの独立した保管
+- 本番の災害復旧Cutover、旧本番のFencing、復旧環境のIaC化、別Region / 別Accountへの復旧
+
 監視：
 
 - Browser RUMの本番有効化
 - Logs集中管理、CloudFront / Nginx / DNSのEdge監視、Production EC2のHost Metrics
+- 公開DomainのEdge選択の修正（DNS移行など。2026-11-20に課題を観測、未実施）
 - 翻訳SLOの7日間達成実績、失敗率・Telemetry欠損の独立したAlert
 - 監視基盤のBackup、Spot再作成からの復元
 - 監視基盤のホスト構成（Container、設定、証明書）のTerraform化
 
 Application・受入：
 
-- 正式な1/2/4性能比較とp95≤20秒・逐次比50%以上短縮の達成
+- 本番条件での1/2/4性能比較とFR-734（p95≤20秒・逐次比50%以上短縮）の正式受入。2026-11-20に隔離環境のBenchmarkでWorker 4が目標を満たした（[CR-01 §13](design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）が、Worker 4は本番に適用していない
 - 網羅的E2E、用語なし翻訳・一時用語集削除完了の本番再検証。CI/CD受入でも、認証を伴うE2Eと翻訳機能は再検証していない
 - 本番Migration適用時の実行ログ（適用済みであることは、Readinessの成功から間接的に確認できる）
 
-2026年11月19日に実装済みとなり、上の一覧から外した項目：`main`へのPushで本番更新する自動CD、Automatic Rollback。2026年11月16日〜17日に一部実装済みとなった項目：翻訳SLOのAlert、外部Availability監視（§14.4）。
+2026年11月19日に実装済みとなり、上の一覧から外した項目：`main`へのPushで本番更新する自動CD、Automatic Rollback。2026年11月16日〜17日に一部実装済みとなった項目：翻訳SLOのAlert、外部Availability監視（§14.4）。2026年11月20日に追加した項目：Data EBSの日次Snapshot（DLM、§16）。
 
-Product Ownerは新LPと10,000件選択成功を本番ブラウザで確認した（2026-11-08）。約40秒→約27秒（参考約32.5%短縮）は正式p95比較ではなく、暫定性能目標の達成は未確認・受入未完了。上記項目は追加検証を要する。
+Product Ownerは新LPと10,000件選択成功を本番ブラウザで確認した（2026-11-08）。約40秒→約27秒（参考約32.5%短縮）は正式p95比較ではなく、本番での暫定性能目標の達成は未確認・受入未完了。上記項目は追加検証を要する。
 
 ## 13. Related Record
 
-現行Releaseと自動Deploymentの証跡は[CI/CD As-Built 2026-11-19](infrastructure/cicd-as-built-2026-11-19.md)、現在の状態の要約は[Production State](infrastructure/production-state.md)を参照する。
+自動Deploymentの受入の証跡は[CI/CD As-Built 2026-11-19](infrastructure/cicd-as-built-2026-11-19.md)、Backupの適用と隔離DR演習の証跡は[DR As-Built 2026-11-20](infrastructure/dr-as-built-2026-11-20.md)、現在の状態の要約は[Production State](infrastructure/production-state.md)を参照する。
 
 Baseline 1.2（Release `9783463`）の証跡と未確認事項は[Production As-Built 2026-11-08](infrastructure/production-as-built-2026-11-08.md)を参照する。過去の本番構築・検証の時系列記録は[Production As-Built 2026-10-26](infrastructure/production-as-built-2026-10-26.md)に記載する。過去の初回公開リリース`f5fb681`と、その時点の検証結果は履歴として同文書に保持する。
 
@@ -641,3 +655,52 @@ flowchart LR
 - 失敗系の結果の分類と通知は単体テストで確認している。実際の本番失敗でのDiscord着信は確認していない。
 - Discordへの配信はBest-effortで、厳密な1回配信を保証しない。
 - Deployment専用のGrafana Panelは追加も確認もしていない。
+
+## 16. Backup and Recovery
+
+2026年11月20日から、本番Data EBSのSnapshotはAmazon Data Lifecycle Manager（DLM）が定期的に作成する。本節は恒久構成の説明である。宣言は`infra/terraform/v5/backup.tf`、適用と検証の結果は[DR As-Built 2026-11-20](infrastructure/dr-as-built-2026-11-20.md)、現在の状態は[Production State §3.9](infrastructure/production-state.md#39-backup--disaster-recovery2026-11-20)、復旧手順は[Disaster Recovery Runbook](infrastructure/disaster-recovery-runbook.md)を正とする。
+
+```mermaid
+flowchart LR
+    subgraph PROD["Production（常設）"]
+        EC2["Production EC2<br/>gmsv5.service"]
+        DATA[("Data EBS gp3 10 GiB 暗号化<br/>Tag Name=gmsv5-sqlite-data<br/>/mnt/gms-data/gmsv5.sqlite")]
+        EC2 --> DATA
+    end
+
+    subgraph DLM["Amazon Data Lifecycle Manager（常設）"]
+        POL["Policy DailyBackup<br/>24h / 19:00 UTC<br/>Retention 2"]
+        ROLE["IAM gmsv5-dlm-role<br/>Delete Guard：Policy管理外のSnapshot削除をDeny"]
+        POL --- ROLE
+    end
+
+    SNAP[("DLM Snapshot<br/>GMSBackupPolicy=daily-data<br/>ManagedBy=DLM")]
+    MANUAL[("手動Snapshot<br/>DLMの管理対象外として保持")]
+
+    POL -->|"Tagで対象を選択"| DATA
+    POL -->|"作成・世代交代"| SNAP
+
+    subgraph RESTORE["復旧時のみ作成（常設しない。Runbook）"]
+        NV[("新規Volume")]
+        DRI["隔離Instance<br/>Artifact検証・Migration・Readiness"]
+        NV --> DRI
+    end
+
+    SNAP -.->|"復元"| NV
+    MANUAL -.->|"復元"| NV
+```
+
+| 要素 | 設計 |
+|---|---|
+| 対象 | Tag `Name=gmsv5-sqlite-data`のData EBS。Root EBSとObservability EC2は対象外 |
+| 周期と保持 | 24時間周期、19:00 UTC（04:00 JST）を基準。Policyが作成したSnapshotを最新2世代保持する。手動Snapshotは数に含めない |
+| Tag | 作成したSnapshotに`Name=gmsv5-daily-data-backup`、`ManagedBy=DLM`、`GMSBackupPolicy=daily-data`を付ける。`CopyTags`はfalse |
+| 削除の制限 | DLM RoleのInline Policyが、`GMSBackupPolicy=daily-data`でないSnapshotの削除を拒否する。DLM Roleへの制約であり、管理者の削除を禁止する機能ではない |
+| 整合性 | EBS Snapshotは稼働中のVolumeの物理的な複製で、SQLiteの整合性を自動では保証しない。復元後に整合性検査を行う |
+| 復旧の形 | 新しいVolumeへ復元し、本番とは別の環境で検証する。元のVolumeとSnapshotは上書きしない。復旧用の資源は常設しない |
+
+限界：
+
+- 24時間周期は24h RPOの達成を保証しない。初回の作成、世代交代、失敗の検知は未確認・未実装である（Production State §3.9）。
+- 同一Region・同一Accountの中の保護である。Region / Accountの喪失、KMS・Secret・Cognitoの復旧は対象外。
+- 2026-11-20の隔離演習で使った一時Instanceと資源は削除済みで、本構成には含まれない。本番へのCutover手順は設計上のGateであり、実行していない（[DR Runbook §8](infrastructure/disaster-recovery-runbook.md#8-production-cutover--separate-change-approval-required)）。
