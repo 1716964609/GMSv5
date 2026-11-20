@@ -2,7 +2,7 @@
 
 **文書バージョン：** Baseline 1.2
 
-**文書状態：** CR-01・CR-02本番反映済み。性能受入未完了・運用証跡は一部要確認。
+**文書状態：** CR-01・CR-02本番反映済み。FR-734の本番での正式な性能受入は測定せず、CR-01の追加最適化は2026年11月20日にProduct OwnerがClose（No Production Rollout、8章）。運用証跡は一部要確認。
 
 **対象変更要求：** CR-01 Bulk Term Selection Performance、CR-02 Public Landing Page Modernization
 
@@ -26,7 +26,7 @@ Product Ownerの実装指示により、既存TermページAPIに改訂検証を
 
 migration v2でGlossary単位のrevision/epochを追加し、全Term更新をDBトリガーで原子的に捕捉する。APIは既存GETの版フィールド、expectedVersion、validateOnlyを追加し既存の通常ページ応答とPOSTを維持する。詳細・保証範囲・移行とPlatform手順は[CR-01技術設計](cr-01-parallel-fetch-design.md)を参照する。
 
-FR-733～FR-735とUC-011はこの採用方針に整合する。ローカル約97ページが高速、旧版旧版本番約40秒はProduct Owner観測であり、今回独立測定はしていない。p95≤20秒/逐次比50%以上短縮の性能受入はPlatform Teamによる別工程とする。本番反映後の観測と未完了の性能受入は7章に記録する。
+FR-733～FR-735とUC-011はこの採用方針に整合する。ローカル約97ページが高速、旧版旧版本番約40秒はProduct Owner観測であり、今回独立測定はしていない。p95≤20秒/逐次比50%以上短縮の性能受入はPlatform Teamによる別工程とする。本番反映後の観測と未完了の性能受入は7章に記録する。2026年11月20日のProduct Owner判断は8章に記録する。
 
 ## 3. CR-02 — Public Landing Page Modernization
 
@@ -186,10 +186,20 @@ Product OwnerとPlatform Teamから、Lavender Editionのローカル表示・�
 
 ---
 
-**状態：CR-01・CR-02本番反映済み。性能受入未完了。Baseline 1.1のその他の要件・承認履歴を維持。**
+**状態：CR-01・CR-02本番反映済み。FR-734の本番性能受入は測定せず、追加最適化はProduct OwnerがClose（2026年11月20日、8章）。Baseline 1.1のその他の要件・承認履歴を維持。**
 
 ## 7. 本番反映・検証状態（2026年11月8日）
 
 2026年11月8日にCR-01・CR-02を本番反映（release `9783463dcdd3f3b10f743ab3e1488978b842b4be`）。Product Ownerは新LP表示と10,000 Term選択成功を本番ブラウザで確認した。旧版約40秒→新版約27秒（参考短縮率約32.5%）は同条件の正式なp95比較ではない。FR-734のp95≤20秒・逐次比50%以上短縮は達成済みとせず、正式な性能受入は未完了。本番Migration適用結果・systemd最終状態の実行ログは未提示で要確認。
 
 [Production As-Built](../infrastructure/production-as-built-2026-11-08.md)にActions Run `42481781676`、バックアップ・隔離DB移行・未確認事項を集約する。暫定デフォルト2、単一操作/同一タブ最大4の実装を維持する。隔離DBの件数とPASSを本番移行後の実測値として扱わない。過去の開発記録のBuild/Deploy未実施は当時の開発担当の範囲を指し、今回報告されたCI/Platformの本番リリースとは区別する。
+
+## 8. Product Owner判断（2026年11月20日）
+
+7章の記録は2026年11月8日時点のまま残す。その後、2026年11月20日に次のことがあった。
+
+- 隔離環境のBenchmarkで同時数1・2・4を各30回比較し、Worker 4がp95 4.4573秒・逐次比61.25%短縮で暫定目標を満たした。Worker 4は本番に適用していない（[CR-01技術設計 §13](cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）。
+- 同日、公開DNSをRoute 53へ移行し、本番の公開経路の遅延が下がった（[DNS Migration As-Built](../infrastructure/dns-migration-as-built-2026-11-20.md)）。
+- Product Ownerは、移行後の現在の性能に満足しているとして、Worker 4の本番適用と追加の並列化を行わないと決定した。状態は**Closed — No Production Rollout**（[CR-01技術設計 §14](cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)）。
+
+本番反映済みのCR-01の実装、改訂検証、整合性の保証、既存の本番同時数設定は維持する。FR-734の本番での正式な性能受入は測定しておらず、数値目標を本番で達成したとはしない。CR-01・CR-02の採用方針と承認履歴は変更しない。

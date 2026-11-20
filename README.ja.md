@@ -12,7 +12,8 @@ GMS v5は、自分の用語集を管理し、翻訳に使う用語を選んでDe
 - **本番アプリケーション：** `main`へのMergeごとに自動デプロイされるため、このREADMEではコミットを固定して記載しません。節目の時点で記録したリリースは[Production State §3.1](docs/infrastructure/production-state.md#31-application-release)、各デプロイの証跡は[Continuous DeploymentのRun](https://github.com/1716964609/GMSv5/actions/workflows/cd.yml)にあります。手動でデプロイした最後のリリースは`364d0b7`（2026年11月14日）です。
 - **CI/CD：** Pull RequestはCI Quality Gateの成功が必須です。保護された`main`へMergeすると、そのコミットをビルド・公開し、本番へ自動デプロイします。
 - **復旧：** 自動ロールバックと再起動時の復旧（Boot Recovery）は、本番EC2で受入に合格しました。どちらも障害を制御して注入した試験です。
-- **バックアップと災害復旧：** Amazon Data Lifecycle ManagerによるDB用EBSの日次スナップショット（2世代保持）を2026年11月20日に適用しました。初回の定期スナップショットと世代交代はまだ確認していません。スナップショットから隔離環境へ復元する演習では、機能の復旧（ログインと用語集の参照）まで7分58秒でした。使った復旧点は約267.5時間前のもので、暫定目標のRPO 24時間は**達成していません**。演習用の資源は削除済みです。詳細は[DR As-Built](docs/infrastructure/dr-as-built-2026-11-20.md)と[災害復旧Runbook](docs/infrastructure/disaster-recovery-runbook.md)にあります。
+- **バックアップと災害復旧：** Amazon Data Lifecycle ManagerによるDB用EBSの日次スナップショット（2世代保持）を2026年11月20日に適用し、同日に初回の自動スナップショットが完了しました。2世代保持の世代交代と継続的なRPO適合はまだ確認しておらず、このスナップショットからの復元も試験していません。スナップショットから隔離環境へ復元する演習では、機能の復旧（ログインと用語集の参照）まで7分58秒でした。使った復旧点は約267.5時間前のもので、暫定目標のRPO 24時間は**達成していません**。演習用の資源は削除済みです。詳細は[DR As-Built](docs/infrastructure/dr-as-built-2026-11-20.md)と[災害復旧Runbook](docs/infrastructure/disaster-recovery-runbook.md)にあります。
+- **公開DNS：** 2026年11月20日に権威DNSをDreamHostからAmazon Route 53へ移しました（レジストラはDreamHostのまま）。ApexはA / AAAAのAliasで既存のCloudFrontを指し、Hosted Zone・レコード・CloudFront Free PlanのサブスクリプションはTerraformで管理します。移行後、ヘルスチェックAPIのwarm TTFBは約300ミリ秒から約31〜36ミリ秒に下がり、東京のEdgeに到達しました。1回だけ遠方のEdgeを観測しており、原因は分かっていません。現在は安定化期間中です。詳細は[DNS Migration As-Built](docs/infrastructure/dns-migration-as-built-2026-11-20.md)にあります。
 - **監視：** サーバー側のTraceとMetricsを本番で有効化し、確認済みです。翻訳遅延のSLOアラート、外部からの死活監視、デプロイ結果の監視が稼働しています。Browser RUMは実装済みですが本番では無効です。ログの集中管理とEdge監視は未完成で、SLOの7日間の達成実績はまだありません。
 - **Baseline 1.2：** 紫系の公開LP刷新（CR-02）と、大量用語選択の制限付き並列取得（CR-01）を本番反映。
 - **利用料金：** GMS自体は無料。DeepL・OpenAIのAPI利用料金は、利用者自身の契約条件に従います。
@@ -40,7 +41,7 @@ LPのガラス調パネルは機能を伝えるコンセプトビジュアルで
 | 計算資源 | Amazon Linux 2023 / ARM64 / Amazon EC2 Spot `t4g.small` |
 | 永続化 | Node.js `node:sqlite` / SQLite / 独立した暗号化Amazon EBS gp3 |
 | 認証 | Amazon Cognito Classic Hosted UI / OAuth Authorization Code / PKCE S256 |
-| 公開・外部接続 | DreamHost DNS / Amazon CloudFront / Nginx / IPv6-first |
+| 公開・外部接続 | Amazon Route 53（権威DNS。レジストラはDreamHost）/ Amazon CloudFront / Nginx / IPv6-first |
 | 構築 | Terraformと手動設定 |
 | CI/CD | GitHub Actions（CI Quality Gate、ARM64 Build、CD）/ GitHub OIDC / Amazon S3（不変なリリース公開）/ AWS Systems Manager |
 | リリース切替 | 原子的なSymbolic Link置換 / Release-aware Readiness / 自動ロールバック / Boot Recovery |
@@ -54,7 +55,7 @@ LPのガラス調パネルは機能を伝えるコンセプトビジュアルで
 ```mermaid
 flowchart TB
     B["利用者のブラウザ"]
-    DNS["DreamHost DNS<br/>名前解決"]
+    DNS["Amazon Route 53<br/>権威DNS・名前解決"]
     IN["Amazon CloudFront<br/>公開Ingress・HTTPS"]
     AUTH["Amazon Cognito<br/>OAuth + PKCE S256"]
 
@@ -168,6 +169,7 @@ SQLite migration v2は`glossary_term_revisions`を追加します。Glossaryご�
 | 小型EC2上のModular Monolith | MVPの費用・運用の複雑性を抑え、画面からDBまで単一アプリケーションで扱います。単一ホスト障害やSpot中断の影響は残ります。水平分散、無停止デプロイ、インスタンスの自動再作成は実装していません。 |
 | 既存構成を変えずにCI/CDを追加 | IPv6-only・ARM64・単一EC2のまま、GitHub OIDC・S3・SSMで配布します。GitHubに静的なAWS認証情報を置かず、EC2への受信ポートも増やしません。その代わり、デプロイのたびにサービスを再起動します。 |
 | リリースを不変にし、切替をトランザクションにする | 公開済みリリースは上書きできず、切替の意図は切替前に永続化します。失敗時は直前のリリースへ自動で戻します。戻すのはコードだけで、DBは戻しません。スキーマが変わるリリースは自動デプロイが拒否します。 |
+| 権威DNSをRoute 53へ移す | 2026年11月20日の調査で、DreamHostのALIAS経由では遠方のCloudFront Edgeが選ばれていました。Route 53のAliasでCloudFrontへ直接解決させ、移行後は東京のEdgeを観測しています。DNSをTerraformで管理できる一方、Edgeの選択はCloudFrontが動的に決めるため、東京のEdgeを常に保証するものではありません。 |
 | SQLiteを独立EBSへ保存 | アプリケーションのリリースと永続データを分離します。暗号化gp3とTerraformの`prevent_destroy`を使いますが、これだけでバックアップや高可用性が保証されるわけではありません。 |
 | 公開CloudFront → NginxをHTTPS化 | ViewerだけでなくOrigin接続もTLSで保護。構築記録ではOrigin側のネットワーク制限と専用認証ヘッダーを併用しています。 |
 | 並列数を制限 | 往復待ちの短縮を狙いながら、小型EC2・SQLiteへの負荷を抑える設計です。同期SQLite処理そのものが並列数に比例して速くなるとは見込みません。 |
@@ -248,10 +250,10 @@ flowchart TB
 - 失敗したデプロイのDiscord通知の着信。開始と成功の通知は本番で確認済みで、失敗系は単体テストでの確認です。通知はBest-effortです。
 - Grafanaのデプロイ用パネル。CloudWatchのMetricはあります。
 - CI/CD受入での、認証を伴うE2Eと翻訳機能の再確認。
-- DLMの定期スナップショットの実行と世代交代の確認、バックアップ失敗の通知。
+- DLMのスナップショットの2世代保持（世代交代）の確認、バックアップ失敗の通知。自動スナップショットの成功は1回です。
 - RPO 24時間の達成、本番への災害復旧の切替、別リージョン・別アカウントへの復旧。演習は隔離環境への復元までで、その所要時間は1回の測定値です。
-- 公開ドメインで遠方のCloudFront Edgeが選ばれる問題の修正（原因は仮説の段階で、DNSは変更していません）。
-- 本番での同時数1・2・4の正式な性能受入。暫定目標の達成は隔離環境のBenchmarkだけで、同時数4は本番に適用していません。
+- CloudFront EdgeとDNSの継続的な監視、DNSSEC。Route 53への移行後の東京のEdgeは観測結果で、保証ではありません。
+- 本番でのFR-734の正式な性能受入。本番では測定していません。暫定目標の達成は隔離環境のBenchmarkだけで、Product Ownerは同時数4の追加最適化を本番に適用せずにCloseしました。
 
 CI/CDの記録にある所要時間（ロールバック処理が約11秒など）は処理の所要時間です。外部から測った停止時間、確立したRTO、保証されたSLOではありません。
 
@@ -271,15 +273,15 @@ CognitoのAuthorization Code FlowをPKCE S256とOAuth stateで保護し、返却
 |---|---|
 | Baseline 1.2本番ブラウザ | Product OwnerがLavender Edition LP表示と10,000 Term選択成功を確認。網羅的なE2E成功とは扱いません。 |
 | Select All所要時間 | 旧版約40秒 → 新版約27秒、参考短縮率約32.5%。同条件の反復測定・正式なp95比較ではありません。 |
-| 性能受入 | p95≤20秒・逐次比50%以上短縮は暫定目標。上記観測から達成済みとはしません。2026年11月20日の隔離環境のBenchmarkでは、同時数4が両方の目標を満たしました（[CR-01 §13](docs/design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）。この設定は本番に適用しておらず、本番での正式な受入は未実施です。 |
-| 公開経路（2026年11月20日） | 独自ドメイン経由で遠方のCloudFront Edgeが選ばれていることを観測。原因は仮説の段階で、DNSは変更していません（[DR As-Built §8](docs/infrastructure/dr-as-built-2026-11-20.md#8-production-latency-investigation--dns--cdn)）。 |
+| 性能受入 | p95≤20秒・逐次比50%以上短縮は暫定目標。上記観測から達成済みとはしません。2026年11月20日の隔離環境のBenchmarkでは、同時数4が両方の目標を満たしました（[CR-01 §13](docs/design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）。DNS移行後、Product Ownerは現在の性能に満足しているとして、同時数4の本番適用と追加の並列化を行わずにCloseしました（[CR-01 §14](docs/design/cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)）。本番での正式な受入は測定しておらず、数値目標を本番で達成したとはしません。Baseline 1.2のCR-01の実装と既存の同時数設定は変えていません。 |
+| 公開経路（2026年11月20日） | 移行前は独自ドメイン経由で遠方のCloudFront Edgeが選ばれていました（[DR As-Built §8](docs/infrastructure/dr-as-built-2026-11-20.md#8-production-latency-investigation--dns--cdn)）。Route 53への移行後、ヘルスチェックAPIのwarm TTFBの中央値はIPv4で303.691→36.352ミリ秒、IPv6で297.809→30.912ミリ秒、計測20回すべて東京のEdgeでした。移行前後は別の時刻の少数標本で、Select Allのp95やSLOではありません。本番ブラウザでログインと9,999件のSelect Allの成功を確認し、翻訳とLogoutは確認していません（[DNS Migration As-Built](docs/infrastructure/dns-migration-as-built-2026-11-20.md)）。 |
 | 監視 Phase 1（2026年11月14日） | 本番の実リクエストのTraceをGrafanaで確認。翻訳1件は約6.87秒、うちDeepL約3.22秒、OpenAI約3.64秒。Prometheusの監視対象は4/4が稼働。1回の観測であり、基準値やSLOではありません。 |
 | 開発検証 | 2026年11月19日に、`main`（`53ece4d`）と同じコードで3つのテストスイートをローカル実行し、298件すべて成功（アプリケーション125、デプロイエンジン140、死活監視33）。Lintはエラー0件・警告4件。過去の記録は、Baseline 1.2で83件、Observability実装後（`75d5b17`）で114件です。 |
 | CI/CD（2026年11月19日） | Quality Gate、OIDC認証、S3への不変な公開、`main`へのPushによる自動デプロイ、自動ロールバック、Boot Recovery、デプロイ結果の記録と開始・成功の通知を本番で確認。GitHub側の記録は再照合済み、AWS側の結果は運用者が提示した受入証跡によります。 |
 | 過去のBuild | Run `43435258778`（Release #11、`364d0b7`）とRun `42481781676`（Release #10、`9783463`）の成功とHead SHAの一致を確認済み。SHA256 Verifiedは運用者の報告によります。 |
 | バックアップ・移行準備 | オンラインバックアップ整合性OK、EBS snapshot completed、隔離DB v1→v2と整合性検証PASSとの報告。本番移行後の実測値には置き換えません。 |
 | 災害復旧演習（2026年11月20日） | スナップショットから隔離環境へ復元し、DBの整合性検査、Migration、期待するリリースのReadiness、ログインと用語集の参照を確認。アプリケーションの復旧5分08秒、機能の復旧7分58秒。1回の隔離環境での測定で、本番の切替を含まず、保証されたRTOではありません。 |
-| 要確認 | 本番Migration適用時のログ（適用済みであることはReadinessの成功から間接的に確認できます）、DLMの定期スナップショットの実行と世代交代、本番への災害復旧の切替、失敗系デプロイ通知の着信、変更409・Abort等の網羅的E2E、端末幅・支援技術・SEOの総合評価。 |
+| 要確認 | 本番Migration適用時のログ（適用済みであることはReadinessの成功から間接的に確認できます）、DLMのスナップショットの世代交代、DNS移行後の安定性（2026年11月22日以降に再確認）と実際の請求、本番への災害復旧の切替、失敗系デプロイ通知の着信、変更409・Abort等の網羅的E2E、端末幅・支援技術・SEOの総合評価。 |
 
 ### 資料とコードの差異・確認事項
 
@@ -340,7 +342,7 @@ npm test
 
 Pull Requestでは、CI Quality Gateが同じ検査に加えてデプロイエンジンと死活監視のテスト、本番ビルドを実行します。`main`へMergeすると本番へ自動デプロイされます。
 
-`NEXT_PUBLIC_GMS_TERM_FETCH_CONCURRENCY`はビルド時の公開設定です。本番での1・2・4比較はPlatform Teamの測定計画に従います。本番DB・AWSの操作手順はこのREADMEでは展開しません。
+`NEXT_PUBLIC_GMS_TERM_FETCH_CONCURRENCY`はビルド時の公開設定です。本番での1・2・4比較は行わず、Product Ownerが追加最適化をCloseしました（[CR-01 §14](docs/design/cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)）。本番DB・AWSの操作手順はこのREADMEでは展開しません。
 
 ## 詳細設計と構築記録
 
@@ -353,7 +355,8 @@ Pull Requestでは、CI Quality Gateが同じ検査に加えてデプロイエ�
 | [Production Architecture](docs/architecture.md) | ネットワーク・認証・永続化・CI/CD・監視の構成（As-Is）。状態遷移、ロールバック、Boot Recovery、デプロイ監視の図を含む |
 | [Production State](docs/infrastructure/production-state.md) | 現在の本番状態。実測、Terraformの管理範囲、手動構築、未実装を区別 |
 | [CI/CD As-Built 2026-11-19](docs/infrastructure/cicd-as-built-2026-11-19.md) / [CI/CD Operations Runbook](docs/infrastructure/cicd-operations-runbook.md) | CI/CD・自動ロールバック・Boot Recovery・デプロイ監視の本番受入の証跡と、運用手順 |
-| [DR As-Built 2026-11-20](docs/infrastructure/dr-as-built-2026-11-20.md) / [災害復旧Runbook](docs/infrastructure/disaster-recovery-runbook.md) | DLMのバックアップ設定、隔離環境での復元演習（RPO / RTO）、CR-01のBenchmark、DNS / CDN調査の証跡と、スナップショットからの復旧手順 |
+| [DR As-Built 2026-11-20](docs/infrastructure/dr-as-built-2026-11-20.md) / [災害復旧Runbook](docs/infrastructure/disaster-recovery-runbook.md) | DLMのバックアップ設定、隔離環境での復元演習（RPO / RTO）、CR-01のBenchmark、移行前のDNS / CDN調査の証跡と、スナップショットからの復旧・OriginのDNS変更の手順 |
+| [DNS Migration As-Built 2026-11-20](docs/infrastructure/dns-migration-as-built-2026-11-20.md) | Route 53への移行の時系列、Edgeの選択と遅延、Smoke test、CloudFront Free Plan、TerraformのImport、切り戻しの条件 |
 | [Development文書](docs/development/README.md) / [Telemetry Schema v1](docs/development/observability/application-instrumentation.md) | アプリケーションの範囲、Span・Metric・設定・Redactionの定義 |
 | [Infrastructure文書](docs/infrastructure/README.md) / [Observability As-Built 2026-11-13](docs/infrastructure/observability-as-built-2026-11-13.md) | インフラの範囲と記録の規則、監視基盤の証跡（§12が11月14日の本番受入） |
 | [Observability As-Built 2026-11-16](docs/infrastructure/observability-as-built-2026-11-16.md) / [Availability As-Built 2026-11-17](docs/infrastructure/availability-external-as-built-2026-11-17.md) | 翻訳SLOとDiscord通知、外部からの死活監視とSpot中断の監視 |

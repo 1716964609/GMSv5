@@ -6,7 +6,7 @@
 
 GMS v5は1つのRepository（Monorepo）で開発している。本書は、その中の**Development**（Application）と**Infrastructure**（AWS・ホスト・監視基盤）の責任範囲を分け、将来Infrastructureを別Repositoryへ移せる形に文書を整理する。
 
-> 本書は案内であり、証跡ではない。本番の変更と検証結果は日付付きAs-Builtに記録する。最新は[DR As-Built 2026-11-20](./infrastructure/dr-as-built-2026-11-20.md)（Backup、隔離DR演習、性能、DNS / CDN）、CI/CDについては[CI/CD As-Built 2026-11-19](./infrastructure/cicd-as-built-2026-11-19.md)である。
+> 本書は案内であり、証跡ではない。本番の変更と検証結果は日付付きAs-Builtに記録する。最新は[DNS Migration As-Built 2026-11-20](./infrastructure/dns-migration-as-built-2026-11-20.md)（Route 53への移行、Edge選択と遅延、Free Plan）と[DR As-Built 2026-11-20](./infrastructure/dr-as-built-2026-11-20.md)（Backup、隔離DR演習、隔離Benchmark、移行前のDNS / CDN調査）、CI/CDについては[CI/CD As-Built 2026-11-19](./infrastructure/cicd-as-built-2026-11-19.md)である。
 >
 > **`main`へのMergeは本番Deploymentを起動する。** 自動CDが有効な間（`GMSV5_CD_ENABLED=true`）、文書だけの変更でも同じである。文書の編集そのものは本番を変えないが、そのMergeは本番を変える。
 
@@ -14,7 +14,7 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 
 | 項目 | 状態 |
 |---|---|
-| 本番Application Release | `57b9141`（PR #8＝文書のみのMergeによる自動Deployment。2026-11-20のDR演習前後に確認）。CI/CD受入時点は`53ece4d` |
+| 本番Application Release | `3f088ea`（PR #9のMergeによる自動Deployment。2026-11-20のDNS移行の前後で確認）。DR演習時は`57b9141`、CI/CD受入時点は`53ece4d` |
 | CI | Pull Requestで起動するQuality Gate。`main`へのMergeに必須 |
 | CD | `main`へのPushで本番へ自動Deployment。有効 |
 | Automatic Rollback / Boot Recovery | 本番EC2で受入PASS（制御した障害注入による試験） |
@@ -24,13 +24,13 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | Browser RUM | コードはあるが本番無効 |
 | Rolling 7-Day Dashboard、成功翻訳95%/10s SLOとGrafana→Discord通知 | 初期実装・通知Firing/Resolved検証済み。7d実績は未判定 |
 | 外部Availability監視、Spot Lifecycle監視 | 稼働（2026-11-17） |
-| Logs集中管理、Edge監視（CloudFront / Nginx / DNS）、Telemetry欠損監視 | 未完成 |
+| Logs集中管理、Edge監視（CloudFront / Nginx / DNS）、Telemetry欠損監視、Backup失敗の通知 | 未完成 |
 | 無停止Deployment、DBの自動Rollback、Instanceの自動再作成 | 未実装 |
 | InfrastructureのTerraform再現性 | 部分的。ホスト上の構成とDeployment Engineの導入は手動 |
-| Data EBSのBackup（DLM） | 日次Snapshot・2世代保持をApply済み、ENABLED。初回Snapshotの作成とRetentionは未確認 |
+| Data EBSのBackup（DLM） | 日次Snapshot・2世代保持をApply済み、ENABLED。初回の自動Snapshotは成功（2026-11-20）。2世代保持の世代交代と継続的なRPO適合は未確認 |
 | 災害復旧 | Snapshotから隔離環境への復元を実測（Application 308秒、Functional 478秒）。RPO 24hはFAIL（復旧点約267.5h）。DR資源は削除済み。本番Cutoverは未検証 |
-| CR-01の性能（FR-734） | 隔離環境のBenchmarkでWorker 4がp95 4.4573秒・逐次比61.25%短縮。本番への適用と正式受入は未実施 |
-| 公開経路（DNS / CDN） | 独自Domain経由で遠方のCloudFront Edgeを観測。原因は仮説段階、DNS移行は未実施 |
+| CR-01の追加最適化（FR-734） | 隔離環境のBenchmarkでWorker 4がp95 4.4573秒・逐次比61.25%短縮。Product OwnerがWorker 4の本番適用と追加の並列化をClose（No Production Rollout、2026-11-20）。本番での正式な性能受入は測定していない |
+| 公開DNS / CDN | 権威DNSをRoute 53へ移行（2026-11-20、RegistrarはDreamHost）。移行後の計測で東京Edge、Health API warm TTFB median 約31〜36ms（移行前約300ms）。安定化期間中で、2026-11-22以降に再確認 |
 
 詳細と現在状態の要約は[infrastructure/production-state.md](./infrastructure/production-state.md)にある。この表と食い違う場合はそちらを正とする。
 
@@ -56,9 +56,12 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | CI/CDが本番で何を確認済みか | [infrastructure/cicd-as-built-2026-11-19.md](./infrastructure/cicd-as-built-2026-11-19.md) | Infrastructure |
 | Deploymentをどう運用するか | [infrastructure/cicd-operations-runbook.md](./infrastructure/cicd-operations-runbook.md) | Infrastructure |
 | Backup Policyとして何を宣言しているか | `infra/terraform/v5/backup.tf` | Infrastructure |
+| 公開DNSとCloudFront Free Planとして何を宣言しているか | `infra/terraform/v5/dns.tf`、`dns-import.tf`、`pricing-plan.tf` | Infrastructure |
+| DNS移行で何を確認し、何が未確認か | [infrastructure/dns-migration-as-built-2026-11-20.md](./infrastructure/dns-migration-as-built-2026-11-20.md) | Infrastructure |
 | Backupと復旧が実際にどこまで確認済みか（RPO / RTO、DB検証、Cleanup） | [infrastructure/dr-as-built-2026-11-20.md](./infrastructure/dr-as-built-2026-11-20.md) | Infrastructure |
 | 障害時にどう復旧するか | [infrastructure/disaster-recovery-runbook.md](./infrastructure/disaster-recovery-runbook.md) | Infrastructure |
 | CR-01の性能を隔離環境でどう測り、何が出たか | [infrastructure/dr-as-built-2026-11-20.md §7](./infrastructure/dr-as-built-2026-11-20.md#7-cr-01--controlled-select-all-benchmark)（詳細）、[design/cr-01-parallel-fetch-design.md §13](./design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)（設計上の判断） | Infrastructure / Development |
+| CR-01の追加最適化をどう判断したか | [design/cr-01-parallel-fetch-design.md §14](./design/cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)（Product Owner判断。要件の状態注記は[requirements.md](./requirements.md)） | Product / Development |
 | Applicationが配布可能かをどう判定するか | `src/app/api/health/`、`src/lib/health/`（Readinessの契約。§4.3） | Development |
 | 監視基盤をどこまで作る計画か | [architecture-as-to-be-add-observability.md](./architecture-as-to-be-add-observability.md)（As-To-Be） | Infrastructure / SRE |
 
@@ -203,7 +206,8 @@ docs/
    - Infrastructureの作業：[infrastructure/README.md](./infrastructure/README.md) → [production-state.md](./infrastructure/production-state.md) → 参照されている日付付きAs-Built → `infra/terraform/`
    - CI/CDの作業：[architecture.md §10](./architecture.md#10-ci--build--deployment) → [CI/CD As-Built](./infrastructure/cicd-as-built-2026-11-19.md) → [CI/CD Runbook](./infrastructure/cicd-operations-runbook.md) → `.github/workflows/`と`infra/deployment/`
    - Backup・復旧の作業：[production-state.md §3.9](./infrastructure/production-state.md#39-backup--disaster-recovery2026-11-20) → [architecture.md §16](./architecture.md#16-backup-and-recovery) → [DR As-Built](./infrastructure/dr-as-built-2026-11-20.md) → [DR Runbook](./infrastructure/disaster-recovery-runbook.md) → `infra/terraform/v5/backup.tf`
-   - CR-01の性能の作業：[CR-01技術設計](./design/cr-01-parallel-fetch-design.md)（§8の測定計画、§13の結果） → [DR As-Built §7](./infrastructure/dr-as-built-2026-11-20.md#7-cr-01--controlled-select-all-benchmark)（測定条件と生データの所在）
+   - 公開DNSの作業：[production-state.md §3.10](./infrastructure/production-state.md#310-公開経路の性能dns--cdn2026-11-20) → [architecture.md §4.3](./architecture.md#43-公開dns--route-532026-11-20) → [DNS Migration As-Built](./infrastructure/dns-migration-as-built-2026-11-20.md) → [DR Runbook §8.1](./infrastructure/disaster-recovery-runbook.md#81-origin-dns-changes--route-53-and-terraform) → `infra/terraform/v5/dns.tf`
+   - CR-01の性能の作業：[CR-01技術設計](./design/cr-01-parallel-fetch-design.md)（§13の隔離環境の結果、§14のClose判断。追加最適化は現在の作業ではない） → [DR As-Built §7](./infrastructure/dr-as-built-2026-11-20.md#7-cr-01--controlled-select-all-benchmark)（測定条件と生データの所在）
 3. **構成の全体像が要るとき：**[architecture.md](./architecture.md)
 4. **計画を扱うときだけ：**[As-To-Be](./architecture-as-to-be-add-observability.md)
 
@@ -254,6 +258,7 @@ docs/
 - [Architecture Evolution](./GMS_Architecture_Evolution_v1-v5_fixed.md)のv5は2026-11-08の記録に基づく。§7と§8に2026-11-19の状態を追記した。
 - 本番Deploymentを起動せずに文書だけを`main`へ入れる手段は、現在のWorkflowには無い（CDにPathの絞り込みが無い）。
 - As-To-Beにあった、GitHubの`main`を指すリポジトリ内文書への絶対URLは、相対リンクに直した。Observability As-Builtの§10には、記録時の証跡として`main`を指すURLが残っている。
+- **解消（2026-11-20夕方）：** 権威DNSのRoute 53への移行、DLMの初回Snapshot、CR-01の追加最適化のCloseを、本書、`production-state.md`、`architecture.md`、両README、仕様の文書に反映した。日付付きAs-Built（DR As-Built、As-Built 2026-10-26）は本文を変えず、Follow-upの注記と後継へのリンクだけを足した。[Architecture Evolution](./GMS_Architecture_Evolution_v1-v5_fixed.md)のv5の図と[As-To-Be](./architecture-as-to-be-add-observability.md)のBaselineの表は当時のDreamHost DNSのまま残し、現在の状態への注記を足した。
 - **解消（2026-11-20）：** Repository直下の[README.md](../README.md)と[README.ja.md](../README.ja.md)は、現行Releaseを`53ece4d`と固定して記載し、DLMとDR演習を反映していなかった。両READMEから現行Release SHAの固定記載を外して[production-state.md](./infrastructure/production-state.md)とDeploymentの証跡（GitHub ActionsのRun）を参照する形にし、DLMとDR演習の要約を英日で同じ内容に揃えて追記した。
 - **解消（2026-11-20）：** `production-state.md` §4.1と[infrastructure/README.md](./infrastructure/README.md) §3にあった、`backup.tf`のGit作業状態（未Commit・未Merge）の記載を外した。DR演習終了時点で未追跡だったという日付付きの事実だけを残し、`main`への反映状況はGit履歴で確認する。
 - **解消（2026-11-20）：** [architecture.md §9](./architecture.md#9-persistence-and-process-management)はWALの使用を前提とする書き方だったが、本番のjournal modeは`delete`と観測された（[DR As-Built §2](./infrastructure/dr-as-built-2026-11-20.md#2-initial-state-and-safety-boundaries)）。§9を観測に合わせた。

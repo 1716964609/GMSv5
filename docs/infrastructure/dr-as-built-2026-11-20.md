@@ -10,6 +10,8 @@
 
 本書は当日の実測と適用結果の記録であり、現在状態の要約はProduction State、次回の復旧手順はRunbookを参照する。以下のPASSは明記した試験条件に限る。
 
+> **Follow-up（2026-11-20夕方追記）：** 本文は演習時の記録のまま変更していない。その後の事実は次のとおり。（1）DLMの初回の自動Snapshotが成功した（§12）。Status行の「初回実行未確認」と§3・§10の該当箇所は、§12で更新される。（2）§8で調査したDNS / CDNの問題について、権威DNSをRoute 53へ移行した（[DNS Migration As-Built 2026-11-20](./dns-migration-as-built-2026-11-20.md)）。§8.3の「DNS移行は未実施」は演習時点の事実である。（3）Product OwnerはWorker 4の本番適用と追加の並列化をしないと決定した（[CR-01 §14](../design/cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)）。§7の結果と§5のRPO / RTOの判定は、当時の観測としてそのまま有効である。
+
 ## 1. Acceptance summary
 
 | 項目 | 実測・確認結果 | 判定 |
@@ -223,6 +225,8 @@ IPv6 ping（10回）はmin/avg/max/stddev=146.443/329.048/727.772/198.007ms、lo
 
 DreamHost側のALIAS動作確認、CNAME比較の再実施、必要ならRoute 53 native Alias（apex A/AAAA）へのDNS移行を検討。Domain登録者・EC2・CloudFront・Cognitoは原則維持。Origin用AAAA、ACM検証Recordなどを保全し、移行時は全Zone Record・委任・DNSSEC有無・Rollbackを先に検証する。CloudFront Server-TimingなどのEdge監視は未導入。東京POPへの恒久誘導、DNS移行、Worker 4本番適用は未実施。AWSにおける東京Edge選択は常に保証されるものではない。
 
+> **Follow-up（2026-11-20夕方追記）：** 同日夕方に権威DNSをRoute 53へ移行し、ApexをA / AAAA Aliasへ変更した。移行後の計測では東京Edge（`NRT12-P5`）を観測した。時系列、性能、限界、Terraform管理は[DNS Migration As-Built 2026-11-20](./dns-migration-as-built-2026-11-20.md)にある。上の段落は演習時点の記録として残す。
+
 ## 9. Cleanup and post-drill safety audit
 
 | 時刻（JST） | 操作・確認 |
@@ -268,3 +272,29 @@ Local evidence root: `~/gmsv5-dr-evidence/gmsv5-dr-20261119T163346Z/`。演習�
 | `benchmark/CPUCreditBalance.json`, `CPUCreditUsage.json`, `CPUUtilization.json` | CloudWatch時系列 |
 
 追加証跡は当日のTerminal出力、Chrome DevTools/Tempo/DreamHostの画面、Cognitoログイン・用語集画面。DNS調査と最終Cleanupログは会話に記録されているが、上記14ファイルには含まれていない。1秒Resource Monitorの全サンプルはDR上に作成したが、Localへの全サンプル保存は確認していない（DR削除後は再取得不可）。個人情報、Cookie、Secret、Session Token、復元DB、Terraform State、未加工HARはコミットしない。必要な証跡のみ秘匿検査後に保存する。
+
+## 12. Addendum — First automated DLM snapshot (2026-11-20)
+
+> 2026-11-20に追記した。§3のDLM Policyの初回実行の確認であり、§1〜§11の演習時の記録は変更していない。
+
+| 項目 | 実測・確認結果 |
+|---|---|
+| DLM Policy | `policy-04811170b69e903b4` |
+| Snapshot | `snap-010d97887aba25463` |
+| StartTime | 2026-11-19T19:32:51.927Z（2026-11-20 04:32:51.927 JST） |
+| 確認時刻 | 2026-11-20 11:03 JST頃 |
+| State / Progress | completed / 100% |
+| Encrypted | true |
+| Tag | DLMが付与するTagを確認 |
+| 既存の手動Snapshot | 2件とも保持 |
+
+判定：日次の自動化は**1回成功した**。Scheduleの基準時刻（19:00 UTC）に対し、今回の作成開始は約33分後だった。
+
+未確認のまま残るもの：
+
+- 2世代保持の世代交代（3回目のScheduled Backupの後に確認する）
+- 継続的なRPO適合。1回の成功は日々の成功を示さない
+- このSnapshotからのRestore試験
+- Delete Guardの実動作、DLM失敗の検知・通知
+
+§1と§5.1のRPO FAIL（復旧点約267.5h）は、演習で使った復旧点についての観測であり、新しいSnapshotがあることを理由にRPO受入の成功へ書き換えない。§5.2のRTOの結果も、演習時の観測としてそのまま有効である。現在の状態は[Production State §3.9](./production-state.md#39-backup--disaster-recovery2026-11-20)を参照する。

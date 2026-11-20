@@ -3,7 +3,7 @@
 - **Owner:** Infrastructure / SRE
 - **Baseline:** 2026-11-20 JST
 - **Status:** 隔離Restore Drillに基づく運用手順。Production Cutover、Cold Start全自動化、再起動復旧は未検証。
-- **Evidence:** [DR As-Built 2026-11-20](./dr-as-built-2026-11-20.md)
+- **Evidence:** [DR As-Built 2026-11-20](./dr-as-built-2026-11-20.md)、[DNS Migration As-Built 2026-11-20](./dns-migration-as-built-2026-11-20.md)（Origin DNS、§8.1）
 - **Current state:** [Production State](./production-state.md)、[Architecture](../architecture.md)
 - **Other procedures:** [CI/CD Runbook](./cicd-operations-runbook.md)、[Spot Runbook](./spot-interruption-runbook.md)、[Availability Runbook](./availability-external-runbook.md)
 
@@ -216,11 +216,47 @@ T2は上記必須機能を確認した時点（試験対象の認証/UI/Read-onl
 | G2: Single writer | 旧本番への書込み停止/Fencingを確認。復元DBと旧DBの同時書込みを防止 |
 | G3: Deployment | CDを必要に応じ安全停止、実行中Deployment/Lockの状態を確認。対象Instance/Role/Stateを新構成に整合 |
 | G4: Runtime & secrets | 本番用Secret、Credential復号Key、Cognito、Origin認証/TLS、環境変数を正規経路で復元（演習用Keyを昇格しない） |
-| G5: Network | CloudFront→Nginx HTTPS/IPv6、Origin Protection、証明書、SG/ENI、公開DNS、Callback、Monitoring/Alertingを確認 |
+| G5: Network | CloudFront→Nginx HTTPS/IPv6、Origin Protection、証明書、SG/ENI、公開DNS（Route 53。§8.1）、Callback、Monitoring/Alertingを確認 |
 | G6: Acceptance | 本番Readiness、認証、代表業務、必要な書込み・翻訳操作、データ整合性、Telemetry、Backup、負荷を承認条件に従い確認 |
 | G7: Cutover and rollback | 旧環境保持、切替時刻、切戻し条件、切替後の新規書込みの取り扱いを文書化してから実行 |
 
 Cutover後の書込みがある場合、単純に旧Originへ戻してはならない。データ分岐と損失の扱いを決定する。復旧先をTerraform/CD/DLMの正式な管理対象に移す手順は未検証で、別のChange Planを要する。
+
+### 8.1 Origin DNS changes — Route 53 and Terraform
+
+**2026-11-20に追加。未実行の手順である。** 2026-11-20夕方から、権威DNSはRoute 53で、Hosted ZoneとRecordはTerraformが管理する（[DNS Migration As-Built](./dns-migration-as-built-2026-11-20.md)）。以前のようにDreamHostの管理画面でOriginのRecordを書き換えない。
+
+管理の分担：
+
+| 対象 | 管理場所 |
+|---|---|
+| Hosted Zone、Apex A / AAAA Alias、`origin-v5` AAAA、旧`origin` AAAA、ACM検証CNAME、`edge-test` CNAME | `infra/terraform/v5/dns.tf`（`v5` Root Module、Local State） |
+| `origin-v5` AAAAの値 | `aws_network_interface.v5.ipv6_addresses`から決まる |
+| NS / SOA | Route 53の自動生成（Terraformで個別に管理しない） |
+| RegistrarのNameserver委任 | DreamHost（Terraform外） |
+| 公開CloudFront DistributionのOrigin設定 | Terraform外 |
+
+判断：
+
+1. 公開のApex（CloudFrontへのAlias）は変えない。Cutoverで動かすのはOriginだけである。
+2. 復旧先が既存の`aws_network_interface.v5`以外のENIを使う場合、`origin-v5`のAAAAは自動では追従しない。Terraformの変更をレビューし、変更承認を得る。Route 53のConsoleやCLIで直接書き換えない（次のApplyで元に戻され、宣言と実環境が食い違う）。
+3. CloudFrontのOrigin定義を変える方法はTerraform外の操作になる。どちらの方法を取るかをIncident Ownerが決め、記録する。
+4. Recordを変える前に、新しいOriginがG4 / G5を満たすことを確認する：`origin-v5`に有効なOrigin証明書、CloudFrontのOrigin-Facing Prefix Listを許可したSG、Origin認証Header。Let's EncryptのHTTP-01は`origin-v5`が新しいOriginを指していないと発行・更新できないため、証明書の用意を先に計画する。
+5. NSの委任、Apex、ACM検証Recordは変えない。DR作業の一部として旧`origin`や`edge-test`を削除しない。
+
+確認（Read-only）：
+
+```bash
+for ns in ns-2022.awsdns-60.co.uk ns-154.awsdns-19.com ns-1361.awsdns-42.org ns-552.awsdns-05.net; do
+  dig +short AAAA origin-v5.sunlightjetrans.com @"$ns"
+done
+dig +short NS sunlightjetrans.com
+terraform -chdir=infra/terraform/v5 plan -detailed-exitcode
+```
+
+`plan`は変更を加えないが、AWSのRead APIとLocal Stateを使う。承認済みの変更以外の差分が出たらApplyしない。`origin-v5`のTTLは60秒で、変更後は4台の権威NSすべての応答を確認してから、公開HTTPSのReadinessとCloudFrontの到達を確かめる。
+
+安定化期間中（2026-11-22の再確認まで）はDreamHost側のZoneも残っている。Registrarの委任をDreamHostへ戻した場合は、DreamHost側の`origin-v5`も現在のOriginと一致させる必要がある。どちらが権威DNSかを確認してから作業する。切り戻しはTerraformで直前の値に戻して行う。Cutover後に書込みがある場合は、上の注意に従う。
 
 ## 9. Optional performance verification
 
@@ -284,6 +320,8 @@ aws iam list-instance-profiles --query "InstanceProfiles[?starts_with(InstancePr
 
 ### 11.1 Daily check / first execution acceptance
 
+初回実行の受入は2026-11-20に確認した（[DR As-Built §12](./dr-as-built-2026-11-20.md#12-addendum--first-automated-dlm-snapshot-2026-11-20)）。以下は日常の確認として引き続き使う。
+
 ```bash
 aws dlm get-lifecycle-policy --policy-id "${DLM_POLICY_ID:?}" \
   --query 'Policy.{State:State,Details:PolicyDetails}'
@@ -308,4 +346,5 @@ aws ec2 describe-snapshots --owner-ids self \
 - 実行結果と測定条件は日付付きAs-Builtへ、恒久構成はArchitecture/Production Stateへ、手順変更は本Runbookへ記録する。
 - `backup.tf` のApply済みStateと宣言を照合しGit管理する。State、Plan、SecretはCommitしない。
 - 現行CDはmainへのPush/Mergeを契機にProductionへ自動Deploymentする。Documentationのみでも起動するため、PR/CIとMerge承認を分け、Merge後のCD/Readinessを確認する。
-- DNS移行、Worker 4本番適用、DLM実行検証は独立した変更。今回のDR Cleanupで本番リソースは削除しない。
+- DNS移行、Worker 4本番適用、DLM実行検証は独立した変更。今回のDR Cleanupで本番リソースは削除しない。**（2026-11-20追記：DNS移行は実施済み（§8.1）。Worker 4の本番適用はProduct OwnerがClose。DLMは初回の自動Snapshotが成功し、Retentionは未確認）**
+- 権威DNSのRecordの変更は`infra/terraform/v5/dns.tf`で行い、Plan / Applyの結果を日付付きAs-Builtに記録する。

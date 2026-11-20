@@ -2,13 +2,13 @@
 
 **基準日:** 2026-11-20（JST）
 **状態:** Production Architecture / Implementation Baseline（Architecture As-Is）
-**対象リリース:** `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`（2026-11-19のCI/CD受入時点）。2026-11-20のDR演習時点の本番は`57b914136fcea70247336e7bf65160300e47781c`（文書のみのMerge）。以後も`main`へのMergeごとに自動で更新される
+**対象リリース:** `53ece4d8809cdf439cf9c182ce1f41c0b017e3af`（2026-11-19のCI/CD受入時点）。2026-11-20のDR演習時点の本番は`57b914136fcea70247336e7bf65160300e47781c`（文書のみのMerge）、同日のDNS移行時点は`3f088ea69f957ae2ceb84dc9dc050c84ebf6fe13`。以後も`main`へのMergeごとに自動で更新される
 **公開URL:** `https://sunlightjetrans.com`
 **文書の位置付け:** [Documentation Map](README.md)。現在の本番状態の根拠は[production-state.md](infrastructure/production-state.md)
 
 ## 1. 文書の位置付け
 
-本書は本番構成の設計上の説明（Architecture As-Is）である。2026年11月20日のBackup Automation（DLM）の適用までを反映する。§2〜§9、§11は2026年11月8日のBaseline 1.2（Release `9783463`）の内容を引き継ぐ。§10はCI/CD、Automatic Rollback、Boot Recovery（2026-11-19）、§14はApplicationの計装と監視基盤（2026-11-14〜11-17）、§15はDeploymentの監視（2026-11-19）、§16はData EBSのBackupと復旧（2026-11-20）を扱う。ネットワーク・AWS構成は10月26日の記録を継承し、ライブ環境での再監査は行っていない。
+本書は本番構成の設計上の説明（Architecture As-Is）である。2026年11月20日のBackup Automation（DLM）の適用と、権威DNSのRoute 53への移行までを反映する。§2〜§9、§11は2026年11月8日のBaseline 1.2（Release `9783463`）の内容を引き継ぐ。§10はCI/CD、Automatic Rollback、Boot Recovery（2026-11-19）、§14はApplicationの計装と監視基盤（2026-11-14〜11-17）、§15はDeploymentの監視（2026-11-19）、§16はData EBSのBackupと復旧（2026-11-20）を扱う。§4の公開DNS（§4.3）は2026-11-20に更新した。ネットワーク・AWS構成は10月26日の記録を継承し、ライブ環境での再監査は行っていない。
 
 本書は要約であり、証跡ではない。記載と日付付きAs-Builtが食い違う場合はAs-Builtを正とする。
 
@@ -32,7 +32,8 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 - [Observability As-Built 2026-11-16](infrastructure/observability-as-built-2026-11-16.md) — Translation SLO、Discord通知
 - [Availability As-Built 2026-11-17](infrastructure/availability-external-as-built-2026-11-17.md) — 外部Availability監視、Spot Lifecycle監視
 - [DR As-Built 2026-11-20](infrastructure/dr-as-built-2026-11-20.md) — DLMの適用、隔離DR演習のRPO / RTO、CR-01 Benchmark、DNS / CDN調査の証跡
-- [Disaster Recovery Runbook](infrastructure/disaster-recovery-runbook.md) — Snapshotからの復旧手順、DLMの確認
+- [Disaster Recovery Runbook](infrastructure/disaster-recovery-runbook.md) — Snapshotからの復旧手順、DLMの確認、OriginのDNS変更（§8.1）
+- [DNS Migration As-Built 2026-11-20](infrastructure/dns-migration-as-built-2026-11-20.md) — Route 53への移行、Edge選択と遅延、CloudFront Free Plan、TerraformのImportの証跡
 - [Telemetry Schema v1](development/observability/application-instrumentation.md) — Span、Metric、設定、Redactionの定義
 - [Architecture As-To-Be — Add Observability](architecture-as-to-be-add-observability.md) — 目標構成。未実装の項目を含む
 
@@ -62,13 +63,14 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 | Database | SQLite |
 | Persistent storage | 暗号化された独立EBS gp3 |
 | Backup | Amazon Data Lifecycle Manager（Data EBSの日次Snapshot、2世代保持。§16） |
-| Public ingress | DreamHost DNS / existing CloudFront / Nginx |
+| Authoritative DNS | Amazon Route 53 Public Hosted Zone（RegistrarはDreamHost。2026-11-20から） |
+| Public ingress | Route 53（Apex A / AAAA Alias）/ existing CloudFront / Nginx |
 | DeepL egress | Dedicated CloudFront Reverse Proxy |
 | OpenAI egress | EC2 native IPv6 |
 | Authentication | Amazon Cognito Lite / Classic Hosted UI |
 | Viewer TLS | AWS Certificate Manager |
 | Origin TLS | Let's Encrypt / Nginx |
-| IaC | Terraformと手動設定の併用 |
+| IaC | Terraformと手動設定の併用（Route 53とCloudFront Free PlanのSubscriptionはTerraform、公開CloudFront DistributionとWAFはTerraform外） |
 | CI | GitHub Actions `CI Quality Gate`（Pull Request、ARM64 Runner）。`main`へのMergeに必須 |
 | Build | GitHub Actions ARM64 Runner。Next.js StandaloneのArtifact、SHA256、Release Manifest |
 | CD | GitHub Actions `Continuous Deployment`（`main`へのPush）。GitHub OIDC / AWS STS |
@@ -79,36 +81,44 @@ GMS v5は、ユーザー所有の用語集を管理し、DeepLによる一次翻
 | 外部監視 | EventBridge / Lambda / DynamoDB / CloudWatch（Availability、Spot Lifecycle、Deployment） |
 | 通知 | Discord（Grafana Alert、および外部監視のLambda） |
 
-`main`へのPushで本番を更新する自動CD、Automatic Rollback、Boot Recoveryは2026年11月19日に本番で受入済みである（§10）。翻訳SLOのAlert、外部Availability監視も稼働している（§14）。Data EBSの日次Snapshot（DLM）は2026年11月20日に適用した（§16。初回の実行は未確認）。一方、Instanceの自動再作成とENI/EBSの再構成、無停止Deployment、DBの自動Rollback、本番の災害復旧Cutover、Logs集中管理は、現在のProduction Architectureに実装済みの構成として扱わない（§12）。
+`main`へのPushで本番を更新する自動CD、Automatic Rollback、Boot Recoveryは2026年11月19日に本番で受入済みである（§10）。翻訳SLOのAlert、外部Availability監視も稼働している（§14）。Data EBSの日次Snapshot（DLM）は2026年11月20日に適用し、初回の自動Snapshotが成功した（§16。世代交代は未確認）。権威DNSは同日にRoute 53へ移した（§4.3）。一方、Instanceの自動再作成とENI/EBSの再構成、無停止Deployment、DBの自動Rollback、本番の災害復旧Cutover、Logs集中管理は、現在のProduction Architectureに実装済みの構成として扱わない（§12）。
 
 ## 4. Ingress — 既存Web公開経路
 
 ```mermaid
 flowchart LR
-    B[Browser] --> DNS[DreamHost DNS\nsunlightjetrans.com]
-    DNS --> CF[Existing CloudFront\nE1EF0DWDYA2XH8]
-    CF -->|HTTPS / IPv6| ORIGIN[origin-v5.sunlightjetrans.com]
-    ORIGIN -->|TCP 443| NGINX[EC2 Nginx\nLet's Encrypt]
-    NGINX -->|127.0.0.1:3000| NEXT[Next.js / Node.js\n/opt/gmsv5/current]
-    NEXT --> DB[SQLite]
-    DB --> EBS[独立暗号化EBS\n/mnt/gms-data/gmsv5.sqlite]
+    B[Browser\nIPv4 / IPv6]
+    R53[(Amazon Route 53\n権威DNS)]
+    CF[Existing CloudFront\nE1EF0DWDYA2XH8]
+    NGINX[EC2 Nginx :443\norigin-v5.sunlightjetrans.com\nLet's Encrypt]
+    NEXT[Next.js / Node.js\n/opt/gmsv5/current]
+    DB[SQLite]
+    EBS[独立暗号化EBS\n/mnt/gms-data/gmsv5.sqlite]
+
+    B -.->|DNS照会\nApex A / AAAA Alias| R53
+    CF -.->|DNS照会\norigin-v5 AAAA| R53
+    B ==>|HTTPS| CF
+    CF ==>|HTTPS / IPv6| NGINX
+    NGINX -->|127.0.0.1:3000| NEXT
+    NEXT --> DB
+    DB --> EBS
 ```
+
+点線は名前解決、太線はHTTPSの通信を示す。DNSはHTTPの通信を中継しない。
 
 ### 4.1 公開経路
 
 - 公開ドメイン：`sunlightjetrans.com`
-- DNS：DreamHost
+- 権威DNS：Amazon Route 53（2026-11-20から。RegistrarはDreamHost。§4.3）
 - 既存CloudFront Distribution：`E1EF0DWDYA2XH8`
 - Origin：`origin-v5.sunlightjetrans.com`
-- Viewer → CloudFront：ACMによるHTTPS
+- Viewer → CloudFront：ACMによるHTTPS。ViewerはIPv4とIPv6の両方
 - CloudFront → EC2：HTTPS over IPv6
 - EC2 Nginx：443番
 - Next.js：`127.0.0.1:3000`
 - Node.jsの3000番とNginxの8080番は外部公開しない。
 
-CloudFrontからEC2へのOrigin接続は、IPv6 Prefix ListによるSecurity Group制限と、Nginxの専用Origin認証ヘッダーを併用する。HTTPレスポンスのCloudFrontキャッシュは無効化している。
-
-DreamHostのApex RecordはCloudFront標準DomainへのALIASである。2026-11-20の調査では、独自Domain経由で米国のEdge（`HIO52-P2`）が選ばれ、東京のEdgeより外部から見たTTFBが大きかった。原因はDreamHostのALIAS flatteningによるという仮説の段階で、DNS移行などの修正は行っていない。本節の構成は変わっていない。状態は[Production State §3.10](infrastructure/production-state.md#310-公開経路の性能dns--cdn2026-11-20)、証跡は[DR As-Built §8](infrastructure/dr-as-built-2026-11-20.md#8-production-latency-investigation--dns--cdn)にある。
+CloudFrontからEC2へのOrigin接続は、IPv6 Prefix ListによるSecurity Group制限と、Nginxの専用Origin認証ヘッダーを併用する。HTTPレスポンスのCloudFrontキャッシュは無効化している。公開IngressはIPv4とIPv6のViewerを受け付けるが、Originは公開Ingressの経路としてはIPv6-onlyである。
 
 ### 4.2 IPv6-first制約
 
@@ -117,6 +127,23 @@ DreamHostのApex RecordはCloudFront標準DomainへのALIASである。2026-11-2
 - DNS64/NAT64を追加していない。
 - EC2から外部サービスへは、宛先が提供するIPv6経路を優先する。
 - DeepLのようにIPv4しか返さない／IPv6接続できないサービスは、専用Egress経路を使用する。
+
+### 4.3 公開DNS — Route 53（2026-11-20）
+
+2026-11-20に、権威DNSをDreamHostからRoute 53 Public Hosted Zoneへ移した。RegistrarはDreamHostのままで、Nameserverの委任だけを担う。CloudFront Distribution、Origin、EC2、TLS、Cognito、Applicationは変えていない。
+
+| 要素 | 設計 |
+|---|---|
+| Apex | A / AAAAのAlias Recordで公開CloudFrontを指す。Route 53がCloudFrontのDNSへ直接解決するため、DreamHostのALIASを経由しない |
+| Origin | `origin-v5`のAAAAは本番ENIのIPv6。値はTerraformが`aws_network_interface.v5.ipv6_addresses`から決める |
+| 保持するRecord | ACM管理証明書の更新のためのDNS検証CNAME。旧`origin` AAAAと`edge-test` CNAMEは移行の安定化期間だけ一時的に保持 |
+| IaC | Hosted ZoneとRecordは`infra/terraform/v5/dns.tf`。Hosted Zoneは`prevent_destroy`。自動生成のNS / SOAは個別に管理しない |
+| 料金 | Hosted Zoneを既存のCloudFront Free PlanのSubscriptionへ追加した（`pricing-plan.tf`。`prevent_destroy`）。Subscriptionと関連付けはTerraform、DistributionとWAFそのものはTerraform外 |
+| DNSSEC | 導入していない（親ZoneにDS Recordなし） |
+
+移行前は、独自Domain経由で米国のEdge（`HIO52-P2`）が選ばれ、外部から見たTTFBが大きかった（[DR As-Built §8](infrastructure/dr-as-built-2026-11-20.md#8-production-latency-investigation--dns--cdn)）。移行後の計測では東京のEdge（`NRT12-P5`）が選ばれた。ただし1回だけ米国のEdgeを観測しており、Edgeの選択はCloudFrontが動的に決める。東京のEdgeが常に選ばれることは設計上の保証ではない。状態は[Production State §3.10](infrastructure/production-state.md#310-公開経路の性能dns--cdn2026-11-20)、証跡は[DNS Migration As-Built](infrastructure/dns-migration-as-built-2026-11-20.md)にある。
+
+OriginのRecordを変える手順は[DR Runbook §8.1](infrastructure/disaster-recovery-runbook.md#81-origin-dns-changes--route-53-and-terraform)にある。DNSの変更はTerraformで行い、Consoleで直接書き換えない。
 
 ## 5. Egress — DeepL API専用経路
 
@@ -534,7 +561,7 @@ Deployment・復旧：
 
 Backup・災害復旧：
 
-- DLMによる初回Snapshotの作成・Retentionの確認、DLM失敗の監視、定期的なRestore Drill
+- DLMの2世代保持（世代交代）の確認、DLM失敗の監視、定期的なRestore Drill（初回の自動Snapshotは2026-11-20に成功）
 - 24h RPOの達成（2026-11-20の演習ではFAIL）。SQLite Online Backupの独立した保管
 - 本番の災害復旧Cutover、旧本番のFencing、復旧環境のIaC化、別Region / 別Accountへの復旧
 
@@ -542,18 +569,18 @@ Backup・災害復旧：
 
 - Browser RUMの本番有効化
 - Logs集中管理、CloudFront / Nginx / DNSのEdge監視、Production EC2のHost Metrics
-- 公開DomainのEdge選択の修正（DNS移行など。2026-11-20に課題を観測、未実施）
+- CloudFront Edgeの選択と遅延の継続的な観測（Route 53への移行で改善を観測したが、Edge Observabilityは未実装）、DNSSEC
 - 翻訳SLOの7日間達成実績、失敗率・Telemetry欠損の独立したAlert
 - 監視基盤のBackup、Spot再作成からの復元
 - 監視基盤のホスト構成（Container、設定、証明書）のTerraform化
 
 Application・受入：
 
-- 本番条件での1/2/4性能比較とFR-734（p95≤20秒・逐次比50%以上短縮）の正式受入。2026-11-20に隔離環境のBenchmarkでWorker 4が目標を満たした（[CR-01 §13](design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）が、Worker 4は本番に適用していない
+- FR-734（p95≤20秒・逐次比50%以上短縮）の本番での達成。本番では測定していない。2026-11-20に隔離環境のBenchmarkでWorker 4が目標を満たした（[CR-01 §13](design/cr-01-parallel-fetch-design.md#13-隔離環境benchmark2026-11-20)）が、Product OwnerはWorker 4の本番適用と追加の並列化をClose（No Production Rollout）した（[CR-01 §14](design/cr-01-parallel-fetch-design.md#14-追加最適化のclose2026-11-20)）。未完了の作業ではなく、実装済みとも記載しない項目である。本番の同時数は既存設定のまま
 - 網羅的E2E、用語なし翻訳・一時用語集削除完了の本番再検証。CI/CD受入でも、認証を伴うE2Eと翻訳機能は再検証していない
 - 本番Migration適用時の実行ログ（適用済みであることは、Readinessの成功から間接的に確認できる）
 
-2026年11月19日に実装済みとなり、上の一覧から外した項目：`main`へのPushで本番更新する自動CD、Automatic Rollback。2026年11月16日〜17日に一部実装済みとなった項目：翻訳SLOのAlert、外部Availability監視（§14.4）。2026年11月20日に追加した項目：Data EBSの日次Snapshot（DLM、§16）。
+2026年11月19日に実装済みとなり、上の一覧から外した項目：`main`へのPushで本番更新する自動CD、Automatic Rollback。2026年11月16日〜17日に一部実装済みとなった項目：翻訳SLOのAlert、外部Availability監視（§14.4）。2026年11月20日に追加した項目：Data EBSの日次Snapshot（DLM、§16）、Route 53による権威DNS（§4.3）。
 
 Product Ownerは新LPと10,000件選択成功を本番ブラウザで確認した（2026-11-08）。約40秒→約27秒（参考約32.5%短縮）は正式p95比較ではなく、本番での暫定性能目標の達成は未確認・受入未完了。上記項目は追加検証を要する。
 
@@ -701,6 +728,6 @@ flowchart LR
 
 限界：
 
-- 24時間周期は24h RPOの達成を保証しない。初回の作成、世代交代、失敗の検知は未確認・未実装である（Production State §3.9）。
+- 24時間周期は24h RPOの達成を保証しない。初回の自動Snapshotは2026-11-20に成功したが、世代交代は未確認、失敗の検知は未実装である（Production State §3.9）。
 - 同一Region・同一Accountの中の保護である。Region / Accountの喪失、KMS・Secret・Cognitoの復旧は対象外。
 - 2026-11-20の隔離演習で使った一時Instanceと資源は削除済みで、本構成には含まれない。本番へのCutover手順は設計上のGateであり、実行していない（[DR Runbook §8](infrastructure/disaster-recovery-runbook.md#8-production-cutover--separate-change-approval-required)）。

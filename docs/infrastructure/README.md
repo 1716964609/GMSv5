@@ -11,14 +11,14 @@
 
 Infrastructureが責任を持つもの：
 
-- AWS資源：EC2、EBS、EBS Snapshot、Data Lifecycle Manager、Security Group、IAM、S3、CloudFront、Cognito、SSM Parameter StoreとSSM Document、Lambda、DynamoDB、EventBridge
+- AWS資源：EC2、EBS、EBS Snapshot、Data Lifecycle Manager、Security Group、IAM、S3、CloudFront（Free PlanのSubscriptionを含む）、Route 53、Cognito、SSM Parameter StoreとSSM Document、Lambda、DynamoDB、EventBridge
 - ホスト構成：Nginx、systemd、Node.js Runtime、環境変数ファイル、証明書
 - 監視基盤：OTLP Gateway、OTel Collector、Tempo、Prometheus、Grafana、外部Availability監視
 - Releaseの配布と切替、Rollbackの仕組み：CD Workflow、Deployment Engine（[`infra/deployment/`](../../infra/deployment/)）、Boot Recovery、Deploymentの監視
 - Deployment Engineの導入と更新（手動）、結果が不明なDeploymentの確認
 - Secretの実値の発行・保管・配布・Rotation
 - Backupと復旧：DLMによるData EBSのSnapshot、Restore Drill、復旧手順
-- 公開経路（DNS / CDN）の性能調査と修正
+- 公開DNS（Route 53。RegistrarのNameserver委任はDreamHost）と公開経路（DNS / CDN）の性能
 
 Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、業務仕様、Telemetryの名前と属性の定義。境界の全体は[docs/README.md §4](../README.md#4-責任分担とコードの境界)にある。
 
@@ -27,8 +27,9 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 | 文書 | 種別 | 状態（2026-11-20） |
 |---|---|---|
 | [production-state.md](./production-state.md) | 現在状態の要約 | **Current。最初に読む。** 実測・Terraform管理範囲・手動構築・未実装を分けて記載 |
-| [dr-as-built-2026-11-20.md](./dr-as-built-2026-11-20.md) | 証跡（Backup / DR / 性能 / CDN） | **最新。** DLMの適用、隔離DR演習のRPO / RTOとDB検証、CR-01の隔離Benchmark、DNS / CDN調査、DR資源のCleanup。詳細な実測値と測定条件はこれを正とする |
-| [disaster-recovery-runbook.md](./disaster-recovery-runbook.md) | Runbook | 障害の分類と判断、Snapshotからの隔離復元、DB検証、Cleanup、DLMの日常確認。本番Cutoverは承認が要る設計上のGate（未実行） |
+| [dns-migration-as-built-2026-11-20.md](./dns-migration-as-built-2026-11-20.md) | 証跡（DNS / CDN / Free Plan） | **最新。** DreamHostからRoute 53への権威DNSの移行、時系列、Edge選択とHealth APIの遅延、Smoke test、CloudFront Free Plan、TerraformのImport、切り戻しの条件、残作業 |
+| [dr-as-built-2026-11-20.md](./dr-as-built-2026-11-20.md) | 証跡（Backup / DR / 性能 / CDN） | Backup / DRについては最新。DLMの適用、隔離DR演習のRPO / RTOとDB検証、CR-01の隔離Benchmark、DNS / CDN調査、DR資源のCleanup。詳細な実測値と測定条件はこれを正とする。§12にDLMの初回Snapshot（2026-11-20追記）。§8のDNS / CDNは移行前の調査で、後継はDNS Migration As-Built |
+| [disaster-recovery-runbook.md](./disaster-recovery-runbook.md) | Runbook | 障害の分類と判断、Snapshotからの隔離復元、DB検証、Cleanup、DLMの日常確認、Route 53でのOriginのDNS変更（§8.1）。本番Cutoverは承認が要る設計上のGate（未実行） |
 | [cicd-as-built-2026-11-19.md](./cicd-as-built-2026-11-19.md) | 証跡（CI/CD） | CI/CDについては最新。CI/CD、Automatic Rollback、Boot Recovery、Deployment Observabilityの本番受入。末尾の追補が、`main`へのPushによる最終DeploymentとDiscord着信の確認を記録する |
 | [cicd-operations-runbook.md](./cicd-operations-runbook.md) | Runbook | Deploymentの確認、自動CDの停止、結果コード、分散Lock、Boot Recoveryの調査 |
 | [availability-external-runbook.md](./availability-external-runbook.md) | Runbook | EventBridge、Lambda、HTTP外部監視、Spot復旧確認 |
@@ -38,7 +39,7 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 | [spot-interruption-runbook.md](./spot-interruption-runbook.md) | Runbook | Application / ObservabilityのSpot中断調査、復旧確認、Prometheus再起動安全策 |
 | [observability-as-built-2026-11-13.md](./observability-as-built-2026-11-13.md) | 証跡（監視基盤） | §12が最新（2026-11-14）。§11は2026-11-13夜の記録で、「未完了」とした項目の一部を§12が置き換える。§1〜§10は初期構築時のSnapshot |
 | [production-as-built-2026-11-08.md](./production-as-built-2026-11-08.md) | 証跡（Production） | Historical。Baseline 1.2（Release `9783463`）の記録。「Current release」と手動Releaseの記載はSuperseded |
-| [production-as-built-2026-10-26.md](./production-as-built-2026-10-26.md) | 証跡（Production） | Historical。初期構築とDeepL Egress修正の記録。Ingress、TLS、Nginx、認証、永続化については今もこれが最新の証跡。Releaseの配置と切替（§6.4）、手動DeploymentについてはSuperseded |
+| [production-as-built-2026-10-26.md](./production-as-built-2026-10-26.md) | 証跡（Production） | Historical。初期構築とDeepL Egress修正の記録。Ingress、TLS、Nginx、認証、永続化については今もこれが最新の証跡（DNSは2026-11-20からDNS Migration As-Builtが後継）。Releaseの配置と切替（§6.4）、手動DeploymentについてはSuperseded |
 
 監視は領域ごとに完成度が異なる。領域別の状態は[production-state.md §3.8](./production-state.md)にまとめてある。
 
@@ -54,6 +55,18 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 
 DeploymentやSpot中断などDB復元を要しない障害は、先に[CI/CD Runbook](./cicd-operations-runbook.md)と[Spot Runbook](./spot-interruption-runbook.md)を確認する（DR Runbook §2）。
 
+### 2.2 公開DNSのSource of Truth
+
+| 問い | 正とするもの |
+|---|---|
+| Hosted ZoneとRecord、Free PlanのSubscriptionとして何を宣言しているか | [`infra/terraform/v5/dns.tf`](../../infra/terraform/v5/dns.tf)、[`dns-import.tf`](../../infra/terraform/v5/dns-import.tf)、[`pricing-plan.tf`](../../infra/terraform/v5/pricing-plan.tf)（宣言） |
+| 移行で何をし、何を測ったか | [DNS Migration As-Built 2026-11-20](./dns-migration-as-built-2026-11-20.md) |
+| 今どうなっているか、何が未確認か | [production-state.md §3.10](./production-state.md#310-公開経路の性能dns--cdn2026-11-20) |
+| OriginのRecordをどう変えるか | [DR Runbook §8.1](./disaster-recovery-runbook.md#81-origin-dns-changes--route-53-and-terraform) |
+| 恒久構成の説明と図 | [Architecture §4](../architecture.md#4-ingress--既存web公開経路) |
+
+RegistrarのNameserver委任（DreamHost）、公開CloudFront DistributionとWAFそのもの、自動生成のNS / SOAはTerraformの宣言に含まれない。
+
 関連する横断文書：
 
 - [Architecture As-Is](../architecture.md) — 本番構成の設計上の説明。CI/CD、状態遷移、Rollback、Boot Recovery、Deployment監視の図は§10と§15、Backupと復旧は§16
@@ -63,7 +76,7 @@ DeploymentやSpot中断などDB復元を要しない障害は、先に[CI/CD Run
 
 | Path | 内容 |
 |---|---|
-| [`infra/terraform/v5/`](../../infra/terraform/v5/) | Production：EC2、ENI、EBS、IAM、Release用S3、DeepL用CloudFront、Cognito。`cicd.tf`と`deployment-lock.tf`がGitHub OIDCのDeploy Role、SSM Document `GMSv5-DeployRelease`、分散Lockの権限を宣言する。`backup.tf`がDLMのPolicyとIAM Roleを宣言する（AWSへのApplyは2026-11-20。[DR As-Built §3](./dr-as-built-2026-11-20.md#3-permanent-backup-automation--amazon-data-lifecycle-manager)） |
+| [`infra/terraform/v5/`](../../infra/terraform/v5/) | Production：EC2、ENI、EBS、IAM、Release用S3、DeepL用CloudFront、Cognito。`cicd.tf`と`deployment-lock.tf`がGitHub OIDCのDeploy Role、SSM Document `GMSv5-DeployRelease`、分散Lockの権限を宣言する。`backup.tf`がDLMのPolicyとIAM Roleを宣言する（AWSへのApplyは2026-11-20。[DR As-Built §3](./dr-as-built-2026-11-20.md#3-permanent-backup-automation--amazon-data-lifecycle-manager)）。`dns.tf`と`dns-import.tf`がRoute 53のHosted ZoneとRecord、`pricing-plan.tf`がCloudFront Free PlanのSubscriptionを宣言する（2026-11-20にImport、No changes。[DNS Migration As-Built §11](./dns-migration-as-built-2026-11-20.md#11-terraform-management)） |
 | [`infra/terraform/observability/`](../../infra/terraform/observability/) | Observability EC2：EC2、Security Group、IAM |
 | [`infra/terraform/discord-alert-egress/`](../../infra/terraform/discord-alert-egress/) | Discord通知専用CloudFront、Function、KVS、Origin Request Policy |
 | [`infra/terraform/availability/`](../../infra/terraform/availability/) | 外部監視：Lambda、DynamoDB、EventBridge、IAM。`deployment.tf`と`lambda/deployment.py`がDeploymentイベントを扱う。`tests/`はAvailability監視のテスト（33件） |
@@ -130,6 +143,7 @@ InfrastructureがDevelopmentから受け取るもの：
 | CD Workflow、Deployment Engine、Lock、結果コードの変更 | [Architecture §10](../architecture.md#10-ci--build--deployment)、[CI/CD Runbook](./cicd-operations-runbook.md) |
 | 構成の恒久的な変更 | [Architecture As-Is](../architecture.md) |
 | Backup Policyの変更、Restore Drill | 日付付きAs-Built（Plan / Apply、測定条件と結果）、`production-state.md` §3.9、手順が変わった場合は[DR Runbook](./disaster-recovery-runbook.md)、構成が変わった場合は[Architecture §16](../architecture.md#16-backup-and-recovery) |
+| DNS Recordの変更、Registrarの委任の変更 | `dns.tf`のPlan / Applyの結果を日付付きAs-Built、`production-state.md` §3.10と§4.1、手順が変わった場合は[DR Runbook §8.1](./disaster-recovery-runbook.md#81-origin-dns-changes--route-53-and-terraform)、構成が変わった場合は[Architecture §4](../architecture.md#4-ingress--既存web公開経路) |
 | 手動構築部分のIaC化 | `production-state.md` §5から§4へ移す |
 
 ## 7. Repository分離に向けた現状
