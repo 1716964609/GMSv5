@@ -28,6 +28,8 @@
 | Phase 3 — SRE Operations Readiness | 一部。翻訳遅延のSLO（成功翻訳の95%が10秒以内 / Rolling 7d）とAlert Rule、Discord通知、外部Health Monitoring、Runbook 4本は実装済み。7日間の達成実績、失敗率やTelemetry欠損のAlert、Incident Severity設計、計画的なIncident Simulation、Postmortem Templateは未実装 | [Observability As-Built 2026-11-16](infrastructure/observability-as-built-2026-11-16.md)、[Availability As-Built](infrastructure/availability-external-as-built-2026-11-17.md) |
 | Phase 4 — Performance and Automation | 対象外（後続計画）。変更なし | 本書§12 |
 
+> **2026-11-20 注記：** 権威DNSはDreamHostからAmazon Route 53へ移った（[DNS Migration As-Built](infrastructure/dns-migration-as-built-2026-11-20.md)）。§2.1の表、§3.2の図、§5.2の「DreamHost」は作成時のBaselineとして残す。DNSの監視（Synthetic Probe、権威DNSの応答確認）とCloudFront Server-TimingなどのEdge監視は、引き続き未実装である。上のPhase別の状態は変わらない。
+
 ## Componentの状態（2026-11-19）
 
 | Component（§3.3） | 状態 |
