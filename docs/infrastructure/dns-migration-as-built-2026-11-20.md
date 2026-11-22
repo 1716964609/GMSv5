@@ -9,6 +9,8 @@
 
 本書は当日の実測と適用結果の記録である。現在状態の要約は[Production State](./production-state.md)、恒久構成は[Architecture](../architecture.md)を正とする。以下のPASSは、明記した試験条件と観測地点に限る。
 
+> **Follow-up（2026-11-23 JST）:** 移行後のLet's Encrypt証明書（`origin-v5`）の模擬更新（`certbot renew --dry-run`）がPASSした（§13.1）。本番証明書の実際の更新は未実施で、ACM管理証明書の更新は引き続き未確認である。
+
 ## 1. Acceptance summary
 
 | 項目 | 実測・確認結果 | 判定 |
@@ -256,7 +258,31 @@ Terraform v1.17.2、AWS Provider v6.70.0。いずれも既存の`infra/terraform
 - CloudFrontのOrigin認証SecretのRotationを別に検討する。
 - CloudFront EdgeのObservabilityとBackup失敗の通知は、別の改善候補として残る。
 
-あわせて、次は移行後に確認していない。Origin証明書（Let's Encrypt、HTTP-01 / IPv6、`origin-v5`。[As-Built 2026-10-26 §5.2](./production-as-built-2026-10-26.md#52-lets-encrypt)）の更新は、公開DNSでの`origin-v5`の名前解決に依存し、現在はRoute 53が応答する。ACM管理証明書の更新はACM検証Recordに依存する。どちらのRecordもRoute 53に移したが、移行後の`certbot renew --dry-run`とACMの更新は実施・観測していない。
+あわせて、次は本書の作成時（2026-11-20）には移行後に確認していなかった。Origin証明書（Let's Encrypt、HTTP-01 / IPv6、`origin-v5`。[As-Built 2026-10-26 §5.2](./production-as-built-2026-10-26.md#52-lets-encrypt)）の更新は、公開DNSでの`origin-v5`の名前解決に依存し、現在はRoute 53が応答する。ACM管理証明書の更新はACM検証Recordに依存する。どちらのRecordもRoute 53に移したが、移行後の`certbot renew --dry-run`とACMの更新は実施・観測していなかった。このうちLet's Encryptの模擬更新は2026-11-23に検証した（§13.1）。
+
+### 13.1 Follow-up — Let's Encrypt renewal dry run（2026-11-23）
+
+| 項目 | 内容 |
+|---|---|
+| 検証日 | 2026-11-23 JST |
+| 実行場所 | 本番EC2（SSM Session Managerで接続） |
+| 実行コマンド | `sudo certbot renew --dry-run` |
+| 対象 | `origin-v5.sunlightjetrans.com`（Let's Encrypt） |
+| 認証方式 | HTTP-01 / IPv6 |
+| 結果 | 模擬更新成功 |
+| 判定 | **PASS** |
+| 本番証明書の更新 | 未実施 |
+
+実行結果：
+
+```text
+Simulating renewal of an existing certificate for origin-v5.sunlightjetrans.com
+
+Congratulations, all simulated renewals succeeded:
+  /etc/letsencrypt/live/origin-v5.sunlightjetrans.com/fullchain.pem (success)
+```
+
+DNS移行後の環境で、証明書の模擬更新が成功した。これはDry Runの結果であり、本番証明書の更新完了ではない。ACM管理証明書の更新は今回検証しておらず、未確認のままである。
 
 ## 14. Evidence handling
 

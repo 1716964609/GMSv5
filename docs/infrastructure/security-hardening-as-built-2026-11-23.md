@@ -4,7 +4,7 @@
 - **Evidence window:** 2026-11-22〜23 JST（11月23日未明の最終認証確認を含む）
 - **Recorded:** 2026-11-23 JST
 - **Owner:** Infrastructure / SRE
-- **Scope:** GitHub repository controls、AWS Budget、GitHub Actions OIDC、CI security scan、Operator CLI認証
+- **Scope:** GitHub repository controls、AWS Budget、GitHub Actions OIDC、CI security scan、Operator CLI認証、CloudFront→OriginのIngress公開範囲
 - **Current-state index:** [Production State](production-state.md)
 - **Source of truth for declarations:** [CI Workflow](../../.github/workflows/ci.yml)、[CD Workflow](../../.github/workflows/cd.yml)、[OIDC Verification Workflow](../../.github/workflows/verify-aws-oidc.yml)、`infra/terraform/`
 
@@ -27,7 +27,7 @@
 | ③ GitHub OIDC / IAM Audit | 監査3項目PASS、CDはOIDCを使用 | Operatorによる監査結果 + Workflow宣言 |
 | ④ Trivy | CIにReport-only Job導入、PR #11をMerge | GitHub `main` 宣言 + OperatorのScan結果 |
 | ⑤ Identity Center SSO | 日常認証の移行と無効化試験PASS | OperatorのAWS CLI / Terraform出力 |
-| ⑥ CloudFront Origin Header Rotation | **延期、変更なし** | Product Owner判断 |
+| ⑥ CloudFront Origin Header Rotation | **延期、変更なし**。Ingressを検証し、残存リスクを受容（§6.1〜6.3） | Product Owner判断 + OperatorのAWS CLI / curl実測 |
 
 ## 2. GitHub Secret Protection / Budget（①、②）
 
@@ -161,6 +161,76 @@
 
 **状態:** 上記は設計候補であり、実装済み・本番検証済みの機能ではない。CloudFront Custom Headerを加えるだけではネットワーク上のOrigin直接到達を遮断したことにはならない。
 
+### 6.1 Ingress検証結果（2026-11-23 JST）
+
+上記候補1のうち、Security Group、CloudFrontのOrigin設定、OriginへのHTTP直接Requestを確認した。AWS側の値はAWS CLIによる実環境の確認結果（Operator実測）である。
+
+**Security Group / Ingress：**
+
+| 項目 | 確認結果 |
+|---|---|
+| 本番EC2のネットワークインターフェース | `gmsv5-app-sg`が適用されている |
+| TCP 443 Inbound | AWS管理のプレフィックスリスト`com.amazonaws.global.ipv6.cloudfront.origin-facing`に限定 |
+| TCP 80 Inbound | IPv6全体（`::/0`）に許可 |
+| TCP 80の用途 | Let's EncryptのHTTP-01認証のため、意図的に公開 |
+| Terraform State | `aws_security_group.v5`を確認。Ingressルールを独立して管理するリソースは確認されなかった |
+
+**CloudFront（本番Distribution）：**
+
+| 項目 | 確認結果 |
+|---|---|
+| Default Cache BehaviorのOrigin | `gmsv5-https-probe` |
+| 同Originのドメイン | `origin-v5.sunlightjetrans.com` |
+| 現行Originへの接続方式 | `https-only`、TCP 443 |
+| 旧Origin | `origin.sunlightjetrans.com`が`http-only`としてDistributionに残っている |
+| 参照先 | 確認したDefault Cache Behaviorと追加のCache Behaviorは、いずれも現行のHTTPS Originを参照 |
+
+**HTTP直接アクセス試験：** CloudFrontを経由せず、IPv6でOriginへHTTP Requestを送信した。
+
+```bash
+curl -6 -sS -I \
+  --connect-timeout 5 \
+  --max-time 10 \
+  -H 'Host: sunlightjetrans.com' \
+  http://origin-v5.sunlightjetrans.com/api/health/live
+```
+
+```text
+HTTP/1.1 404 Not Found
+Server: nginx/1.30.5
+```
+
+まとめ：
+
+- TCP 443はCloudFront Origin-facingのIPv6プレフィックスリストに制限されている。
+- TCP 80はLet's Encrypt HTTP-01のためにIPv6全体へ公開している。HTTP-01の更新のDry Runは[DNS As-Built §13.1](dns-migration-as-built-2026-11-20.md#131-follow-up--lets-encrypt-renewal-dry-run2026-11-23)に記録した。
+- CloudFrontを経由しないHTTP 80への到達と、上記のRequestに対するNginxの404応答を実測した。
+- CloudFrontの現行Origin接続はHTTPS 443を使用する。
+- HTTP 80を閉じる変更は行っていない。
+- 今回の検証では、CloudFrontを迂回してアプリケーション本体に到達するアクセスは確認されなかった。
+
+**境界:** この試験で確認したのは、当該Requestへの404応答である。すべてのHTTPパスの応答や、あらゆる迂回経路が存在しないことを証明したものではない。
+
+### 6.2 残存リスク
+
+次の2点は、今回の試験で不正アクセスが成功したことを示すものではない。構成上残るリスクとして記録する。
+
+1. AWS管理のCloudFront Origin-facingプレフィックスリストは、CloudFront全体からの通信を許可する。自分のCloudFront Distributionだけに接続元を限定する仕組みではない。
+2. Originのホスト名は、公開DNSおよび証明書透明性ログ（Certificate Transparency）から第三者が知り得る。Originのホスト名を秘密情報として扱うことはできない。
+
+### 6.3 リスク受容判断（2026-11-23 JST）
+
+**決定:** CloudFront Origin Custom Header Secretは現時点では導入しない。§6.2の残存リスクを受容する。
+
+判断の前提：
+
+- 本サービスは単独運用の小規模サービスである。
+- アプリケーション側の認証は維持されている。
+- 今回の検証では、アプリケーション本体へのCloudFront迂回アクセスは確認されなかった。
+- CloudFront全体を許可するプレフィックスリストの制約、およびOriginホスト名の公開可能性を認識している。
+
+これはリスクを受容する判断であり、技術的にリスクが存在しないことを意味しない。Custom Header Secretは未導入で、設定・検証もしていない。
+
 ## 7. 残課題 / Operator Checkpoints
 
 | Priority | 課題 | 完了条件 |
@@ -169,7 +239,7 @@
 | 次回整理 | 旧IAM Key依存の確認 | GMS外の手動/自動クライアントを調査し、Inactive期間の影響なしを確認 |
 | 次回整理 | 旧Key・IAM UserとローカルCredentialsの撤去 | 依存排除後にKey削除、User削除、Local CredentialのSecure Cleanupを確認 |
 | 任意 | 管理者と日常用Permission Setの分離 | 最小権限の業務用Roleを別途設計・検証 |
-| 将来 | Origin Secret Header / Rotation | 脅威モデルとネットワーク制御の監査後に別設計で判断 |
+| 将来 | Origin Secret Header / Rotation | 2026-11-23のIngress検証後、未導入のまま残存リスクを受容（§6.3）。再評価する場合は脅威モデルを見直し、別設計で判断 |
 
 **Read-onlyな再検証の入口（実行時は `gms-admin` のSSO権限を利用）：**
 
