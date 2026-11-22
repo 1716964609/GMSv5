@@ -18,7 +18,7 @@
 
 2026-11-23 JST時点で、GitHubの機密情報保護、月額予算アラート、OIDC / IAMの監査、およびTrivyのレポート専用Scanを導入・確認した。Operatorの普段のAWS CLI / Terraform操作は、root / 長期IAM Access KeyからIAM Identity Center（SSO、MFA）へ移行した。
 
-ただし、**旧Access KeyはInactiveであり未削除**、旧IAMユーザーも残存する。**Trivyの検出事項は未修正**。**CloudFront→OriginのCustom Header Secret Rotationは未実装・延期**。この3点を「完了」としない。
+ただし、**旧Access KeyはInactiveであり未削除**、旧IAMユーザーも残存する。**Trivy検出事項のうちIMDSv2のTerraform宣言不足は対応済み**。その他は対応方針を記録し、未完了項目を継続管理する。**CloudFront→OriginのCustom Header Secret Rotationは未実装・延期**。この3点を「完了」としない。
 
 | Mission | 達成状況 | 根拠の種類 |
 |---|---|---|
@@ -82,9 +82,31 @@
 
 主な検出は、Security Groupの広いEgress（CRITICAL 3）、CloudFrontのWAF未関連付け（HIGH 2）、S3のCustomer-managed KMS未使用（HIGH 1）、Terraform上のEC2 IMDSv2設定未明示（HIGH 1）。**ScanのSeverityは検出ツールの評価**であり、本番脆弱性の成立や即時修正の必要性を個別に実証したものではない。
 
-IMDSv2は、OperatorのAWS実環境確認ではProduction EC2の `HttpTokens=required`。Terraformに明示されていないこととの**Drift / 宣言不足**として別途検討する。Scan結果はArtifact保持期限後に消えるため、後から参照する際は新しいCI Scanで再計測する。
+### 検出事項への対応方針（2026-11-23 JST）
 
-**未実施:** Trivy検出事項の修正、Blocking Gateへの昇格、運用的なFalse Positive Triage。これらはScan導入とは別の変更として扱う。
+| 検出項目 | 判断・対応方針 |
+|---|---|
+| IMDSv2（HIGH 1） | **対応済み。** 本番EC2の `HttpTokens=required` に合わせ、`infra/terraform/v5/main.tf` の `aws_instance.v5` に `metadata_options` を追加。`http_endpoint = "enabled"`、`http_tokens = "required"` を明示した。 |
+| Security Group Egress（CRITICAL 3） | **暫定リスク受容。** OpenAI、DeepL、AWS API等の外部サービスとの通信が必要であり、宛先IPによる固定的な制限は難しい。ただし、対象Security Groupごとに必要なプロトコル・ポートへの制限余地は継続評価する。 |
+| CloudFront WAF（HIGH 2） | **導入保留。** 追加費用を考慮し、現在利用中のCloudFrontプランにWAF機能が含まれるかを確認してから再判断する。 |
+| S3 Customer-managed KMS（HIGH 1） | **追加導入しない方針。** 現時点の暗号化要件にはSSE-S3で十分と判断する。対象バケットの暗号化設定は別途確認する。 |
+| 依存パッケージの脆弱性（MEDIUM 7） | **個別調査・修正予定。** 修正版が存在するものは互換性とテスト結果を確認して更新する。修正版がない場合は影響と残存リスクを記録する。 |
+
+**IMDSv2変更の検証結果：**
+
+- 変更対象：`infra/terraform/v5/main.tf` の `aws_instance.v5`
+- `terraform fmt -check`：PASS
+- `terraform validate`：PASS
+- AWS SSO（`terraform` Profile）によるPlan：**No changes**
+- `terraform plan -detailed-exitcode`：**終了コード 0**
+- 本番AWSリソースへの変更：**なし**
+- `terraform apply`：**未実施・不要**
+
+この対応は本番EC2の設定変更ではなく、Terraform宣言と既存実態の整合化である。
+
+その他のMEDIUM / LOWのIaC検出11件は、個別のTriageが未完了である。初回Scanの結果は履歴として保持し、修正後の最新状況は再Scanで確認する。JSON Artifactの保持期間は14日間。
+
+**未実施:** 依存パッケージの更新、WAFプラン確認、S3暗号化設定の個別確認、残るIaC FindingのTriage、Blocking Gateへの昇格。これらはScan導入およびIMDSv2宣言修正とは別の作業として扱う。
 
 ## 5. IAM Identity CenterへのOperator認証移行（⑤）
 
@@ -143,7 +165,7 @@ IMDSv2は、OperatorのAWS実環境確認ではProduction EC2の `HttpTokens=req
 
 | Priority | 課題 | 完了条件 |
 |---|---|---|
-| 次回整理 | Trivy FindingsのTriage | 各Findingの実際の露出・補償的制御・修正要否を記録 |
+| 次回整理 | Trivy Findingsの残課題 | 依存7件の修正版確認、残るIaC FindingのTriage、WAFプランとS3暗号化設定の確認 |
 | 次回整理 | 旧IAM Key依存の確認 | GMS外の手動/自動クライアントを調査し、Inactive期間の影響なしを確認 |
 | 次回整理 | 旧Key・IAM UserとローカルCredentialsの撤去 | 依存排除後にKey削除、User削除、Local CredentialのSecure Cleanupを確認 |
 | 任意 | 管理者と日常用Permission Setの分離 | 最小権限の業務用Roleを別途設計・検証 |
