@@ -64,3 +64,59 @@ jobs:
 
       - name: Verify standalone output
         run: test -f .next/standalone/server.js
+
+  trivy-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install verified Trivy CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="0.76.2"
+          ARCHIVE="trivy_${VERSION}_Linux-64bit.tar.gz"
+          EXPECTED_SHA256="bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/$ARCHIVE" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${VERSION}/${ARCHIVE}"
+
+          echo "${EXPECTED_SHA256}  $RUNNER_TEMP/$ARCHIVE" | sha256sum --check -
+
+          mkdir -p "$RUNNER_TEMP/trivy"
+          tar -xzf "$RUNNER_TEMP/$ARCHIVE" -C "$RUNNER_TEMP/trivy" trivy
+
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      - name: Scan repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p trivy-reports
+
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --format json \
+            --output trivy-reports/trivy.json \
+            --exit-code 0 \
+            --no-progress \
+            .
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-security-report
+          path: trivy-reports/trivy.json
+          if-no-files-found: warn
+          retention-days: 14
