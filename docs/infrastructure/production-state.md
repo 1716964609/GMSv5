@@ -1,6 +1,6 @@
 # GMS v5 — Production State（現在の本番状態）
 
-- **基準日:** 2026-11-20（JST）
+- **基準日:** 2026-11-23（JST）
 - **文書種別:** Current State Summary（一次証跡への索引。本書自体は証跡ではない）
 - **Owner:** Infrastructure / SRE
 - **対象:** Production EC2 #1（Application）とObservability EC2 #2（監視基盤）
@@ -13,6 +13,19 @@
 > **2026-11-20の更新について:** DLMの適用、DR演習、性能試験、DNS / CDN調査、Cleanupの結果は、Operatorが実施・提示した証跡を記録した[DR As-Built 2026-11-20](./dr-as-built-2026-11-20.md)による。`57b9141`のDeployment Runは2026-11-20にGitHubから読み取って照合した。本書の更新にあたり、AWS・EC2・DNSへの照会や変更は行っていない。
 >
 > **2026-11-20（夕方）の更新について:** Route 53への移行、性能測定、Smoke test、Terraform Import、DLMの初回Snapshotの結果は、Operatorが実施・提示した証跡を記録した[DNS Migration As-Built 2026-11-20](./dns-migration-as-built-2026-11-20.md)と[DR As-Built §12](./dr-as-built-2026-11-20.md#12-addendum--first-automated-dlm-snapshot-2026-11-20)による。`3f088ea`のDeployment RunとTerraformのCommitは、2026-11-20にGitHubとGitから読み取って照合した。本書の更新にあたり、AWS・DNSへの照会や変更は行っていない。
+
+## Update: 2026-11-23 — Security Baseline / IAM SSO
+
+**一次証跡:** [Security Hardening As-Built](./security-hardening-as-built-2026-11-23.md)。
+
+- GitHub Secret Protection / Push Protectionを設定。
+- AWS Budget（USD 20、Actual 80% / Forecast 100% / Actual 150%）を設定。
+- GitHub OIDC / IAM監査は3項目PASS。
+- CIにTrivyのReport-only Scanを導入（PR #11）。
+- IAM Identity Center SSOへOperator認証を移行。Terraform 4 RootでNo changesを確認。
+- 旧IAM Access KeyはInactive。削除は未実施。
+- Trivy検出事項のTriageは未完了。
+- CloudFront Origin Secret Rotationは延期。実装していない。
 
 ## Update: 2026-11-20（夕方） — Route 53 DNS移行、DLM初回Snapshot、CR-01追加最適化のClose
 

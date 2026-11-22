@@ -48,6 +48,7 @@ GMS v5は1つのRepository（Monorepo）で開発している。本書は、そ�
 | Telemetryの名前・属性・設定・Redaction | [development/observability/application-instrumentation.md](./development/observability/application-instrumentation.md) | Development |
 | Applicationが実際にどう動くか | `src/`、`test/`、`e2e/` | Development |
 | 本番で今なにが動いているか | [infrastructure/production-state.md](./infrastructure/production-state.md)と、そこから参照する日付付きAs-Built | Infrastructure |
+| Security Hardening、Trivy、IAM SSO移行の証跡 | [Security As-Built](./infrastructure/security-hardening-as-built-2026-11-23.md) | Infrastructure |
 | 本番構成の設計上の説明 | [architecture.md](./architecture.md)（Architecture As-Is） | Infrastructure（Application構成の節はDevelopment） |
 | 何がTerraformで定義されているか | `infra/terraform/` | Infrastructure |
 | Mergeの前に何を検査するか | `.github/workflows/ci.yml` | Development / Infrastructure |

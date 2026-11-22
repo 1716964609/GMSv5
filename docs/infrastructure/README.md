@@ -27,6 +27,7 @@ Infrastructureが持たないもの：`src/`、`test/`、`e2e/`のコード、�
 | 文書 | 種別 | 状態（2026-11-20） |
 |---|---|---|
 | [production-state.md](./production-state.md) | 現在状態の要約 | **Current。最初に読む。** 実測・Terraform管理範囲・手動構築・未実装を分けて記載 |
+| [security-hardening-as-built-2026-11-23.md](./security-hardening-as-built-2026-11-23.md) | 証跡（Security / IAM / FinOps） | 2026-11-23のSecurity Baseline、SSO移行、残課題と延期判断 |
 | [dns-migration-as-built-2026-11-20.md](./dns-migration-as-built-2026-11-20.md) | 証跡（DNS / CDN / Free Plan） | **最新。** DreamHostからRoute 53への権威DNSの移行、時系列、Edge選択とHealth APIの遅延、Smoke test、CloudFront Free Plan、TerraformのImport、切り戻しの条件、残作業 |
 | [dr-as-built-2026-11-20.md](./dr-as-built-2026-11-20.md) | 証跡（Backup / DR / 性能 / CDN） | Backup / DRについては最新。DLMの適用、隔離DR演習のRPO / RTOとDB検証、CR-01の隔離Benchmark、DNS / CDN調査、DR資源のCleanup。詳細な実測値と測定条件はこれを正とする。§12にDLMの初回Snapshot（2026-11-20追記）。§8のDNS / CDNは移行前の調査で、後継はDNS Migration As-Built |
 | [disaster-recovery-runbook.md](./disaster-recovery-runbook.md) | Runbook | 障害の分類と判断、Snapshotからの隔離復元、DB検証、Cleanup、DLMの日常確認、Route 53でのOriginのDNS変更（§8.1）。本番Cutoverは承認が要る設計上のGate（未実行） |
