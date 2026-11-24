@@ -26,6 +26,7 @@ DATE_FMT = "%Y-%m-%dT%H:%M:%SZ"
 STATE_EVENT = "EC2 Instance State-change Notification"
 WARNING_EVENT = "EC2 Spot Instance Interruption Warning"
 REBALANCE_EVENT = "EC2 Instance Rebalance Recommendation"
+SPOT_SIGNAL_PHASES = {WARNING_EVENT: "warning", REBALANCE_EVENT: "rebalance"}
 
 
 def now_utc() -> datetime:
@@ -98,6 +99,34 @@ def notify(message: str):
     with urllib.request.urlopen(request, timeout=8) as resp:
         if resp.status not in (200, 204):
             raise RuntimeError(f"Discord relay status {resp.status}")
+
+
+def spot_enabled() -> bool:
+    return os.environ.get("SPOT_STATUS_COLLECTION") == "enabled"
+
+
+def spot_evidence(action: str, *args, **kwargs):
+    """Spot reason evidence is optional. It must never break availability monitoring."""
+    if not spot_enabled():
+        return None
+    try:
+        import spot_status
+
+        # The collector's own table client has bounded timeouts.
+        return getattr(spot_status, action)(spot_status.table(), *args, **kwargs)
+    except Exception as exc:  # Fail open by design.
+        LOG.warning("Spot status evidence skipped (%s): %s", action, type(exc).__name__)
+        return None
+
+
+def spot_text(function: str, value, fallback: str) -> str:
+    try:
+        import spot_status
+
+        return getattr(spot_status, function)(value)
+    except Exception as exc:  # Fail open by design.
+        LOG.warning("Spot status text unavailable: %s", type(exc).__name__)
+        return fallback
 
 
 def probe_http() -> bool:
@@ -243,7 +272,11 @@ def complete_incident(instance_id: str, *, recovery_at: str, proof: str):
     metric("StopToRecoverySeconds", downtime, dimension=instance_id, unit="Seconds",
            instant=end)
     suffix = "HTTP 200 を実測" if proof == "http200" else "EC2 running（サービス復旧は未確認）"
-    notify(f"[GMS v5 RECOVERED] {instance_id}: {downtime}s (event-time based); {suffix}")
+    message = f"[GMS v5 RECOVERED] {instance_id}: {downtime}s (event-time based); {suffix}"
+    if spot_enabled():
+        message += "\n" + spot_text("incident_summary", row,
+                                     "Spot cause: UNKNOWN (summary unavailable)")
+    notify(message)
     save_state(instance_id, {"active_stop": "", "last_recovered": end})
     return True
 
@@ -275,6 +308,10 @@ def handle_ec2(event: dict, context=None):
     at = timestamp(event["time"])
     if dt == STATE_EVENT:
         state_name = event.get("detail", {}).get("state")
+        if state_name == "stopping" and spot_enabled():
+            # Evidence only: stopping never opens or closes an incident.
+            spot_evidence("on_signal", iid, event, "stopping", STATE_KEY, context=context)
+            return {"stored": "stopping"}
         if state_name not in ("stopped", "running"):
             return {"ignored": "other state"}
         prior_state = read_state(iid)
@@ -302,10 +339,14 @@ def handle_ec2(event: dict, context=None):
                     recovered = poll_after_running(context)
                     if recovered:
                         complete_incident(iid, recovery_at=recovered, proof="http200")
+                spot_evidence("on_stopped", iid, event, key, prior_state,
+                              context=context, retries=False)
                 return {"stored": "late_stopped_paired"}
             save_state(iid, {"ec2_state": "stopped", "active_stop": key,
                              "last_stopped": at})
             LOG.info("EC2 stopped event recorded: %s", iid)
+            # After the incident is registered: retries at about +2s and +5s.
+            spot_evidence("on_stopped", iid, event, key, prior_state, context=context)
             return {"stored": "stopped"}
         key = assign_running(iid, at)
         if key and iid == cfg["obs"]:
@@ -314,13 +355,21 @@ def handle_ec2(event: dict, context=None):
             recovered = poll_after_running(context)
             if recovered:
                 complete_incident(iid, recovery_at=recovered, proof="http200")
+        # After recovery processing, so the recovery timestamp is not delayed.
+        spot_evidence("on_running", iid, event, key, context=context)
         return {"stored": "running", "incident": bool(key)}
     if dt in {WARNING_EVENT, REBALANCE_EVENT}:
         created = save_event(iid, event, dt, trigger="spot_signal")
         if created:
+            # last_spot_warning keeps its historical meaning (warning OR rebalance).
             save_state(iid, {"last_spot_warning": at})
             kind = "INTERRUPTION WARNING" if dt == WARNING_EVENT else "REBALANCE RECOMMENDATION"
-            notify(f"[GMS v5 {kind}] {iid} at {at}; {event.get('detail', {}).get('instance-action', 'unknown action')}")
+            try:
+                notify(f"[GMS v5 {kind}] {iid} at {at}; {event.get('detail', {}).get('instance-action', 'unknown action')}")
+            finally:
+                # Evidence only after the notification, so it never delays it.
+                spot_evidence("on_signal", iid, event, SPOT_SIGNAL_PHASES[dt],
+                              STATE_KEY, context=context)
         return {"stored": dt, "new": created}
     return {"ignored": "other detail-type"}
 

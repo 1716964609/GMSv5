@@ -99,10 +99,12 @@ data "aws_iam_policy_document" "lambda_runtime" {
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.discord_token_parameter}"
     ]
   }
-  # Optional future checks of state; no EC2 mutations are allowed.
+  # Read-only EC2 and Spot request status for interruption evidence.
+  # These Describe actions do not support resource-level permissions.
+  # No EC2 mutations are allowed.
   statement {
     sid       = "ReadEC2State"
-    actions   = ["ec2:DescribeInstances"]
+    actions   = ["ec2:DescribeInstances", "ec2:DescribeSpotInstanceRequests"]
     resources = ["*"]
   }
   # CloudWatch Logs group is created separately; Lambda writes streams/events.
@@ -147,13 +149,16 @@ resource "aws_lambda_function" "availability" {
       HEALTH_URL              = var.health_url
       DISCORD_CLOUDFRONT_URL  = var.discord_cloudfront_url
       DISCORD_TOKEN_PARAMETER = var.discord_token_parameter
+      # Spot interruption reason evidence (lambda/spot_status.py); fails open.
+      SPOT_STATUS_COLLECTION = "enabled"
     }
   }
   depends_on = [aws_iam_role_policy.lambda_runtime, aws_cloudwatch_log_group.lambda]
   tags       = { Project = "GMSv5", Owner = "SRE" }
 }
 
-# Rule 1: only stopped/running transitions for the two existing instances.
+# Rule 1: stopping/stopped/running transitions for the two existing instances.
+# stopping is evidence only; incidents still start at stopped.
 resource "aws_cloudwatch_event_rule" "state" {
   name = "gmsv5-availability-instance-state"
   event_pattern = jsonencode({
@@ -161,7 +166,7 @@ resource "aws_cloudwatch_event_rule" "state" {
     "detail-type" = ["EC2 Instance State-change Notification"]
     detail = {
       "instance-id" = [var.app_instance_id, var.observability_instance_id]
-      state         = ["stopped", "running"]
+      state         = ["stopping", "stopped", "running"]
     }
   })
 }
