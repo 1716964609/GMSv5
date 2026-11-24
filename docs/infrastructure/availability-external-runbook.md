@@ -26,6 +26,13 @@
 > 3. The test suite of this module now has 33 tests, including the
 >    deployment handler tests, and runs in the CI Quality Gate. The
 >    "19/19" result in §5 is the 2026-11-17 figure.
+>
+> **Added 2026-11-25:** the Spot interruption reason evidence change
+> (§12) adds `lambda/spot_status.py`, the EC2 `stopping` state to the
+> state-change rule, `ec2:DescribeSpotInstanceRequests` to the Lambda
+> role and 80 tests (113 in total). It was **deployed on 2026-11-25 at
+> 01:35 JST** ([As-Built](./spot-reason-tracking-as-built-2026-11-25.md)). Real Spot reason capture is not yet
+> verified. §1 and §2 still describe the rest of the module correctly.
 
 ## 1. Architecture
 
@@ -438,3 +445,239 @@ aws ec2 wait instance-running --region ap-northeast-1 --instance-ids "$APP_ID"
 ```
 
 After start, run local Application SSM readiness and HTTP checks from the preceding [Spot Interruption Runbook](./spot-interruption-runbook.md), and verify the Lambda's incident row, CloudWatch event-duration metric, Discord message and external UptimeRobot result. If a Stop/Start API fails, do not keep experimenting: diagnose the state and restore service before continuing. **A manually induced outage tests state transitions and recovery logic, but does not prove a true Spot interruption warning was emitted.**
+
+## 12. Spot interruption reason evidence
+
+**Status (2026-11-25): deployed (01:35 JST); production configuration
+and the existing HTTP monitoring verified. Real Spot status collection,
+reason association and cause-bearing RECOVERED messages are PENDING
+until a natural interruption occurs.** Evidence:
+[Spot Reason Tracking As-Built](./spot-reason-tracking-as-built-2026-11-25.md). Classification and the
+investigation procedure are in the
+[Spot Interruption Runbook §9](./spot-interruption-runbook.md#9-interruption-reason-evidence).
+
+### 12.1 What changes
+
+| Item | Change |
+|---|---|
+| EventBridge rule `gmsv5-availability-instance-state` | Adds `stopping` to `stopped` and `running`. Targets and other rules unchanged. |
+| Lambda role policy `ReadEC2State` | Adds `ec2:DescribeSpotInstanceRequests` (read only, `Resource: *` because the action has no resource-level permission). No EC2 write action. |
+| Lambda environment | `SPOT_STATUS_COLLECTION=enabled`. Any other value restores the previous behavior, including ignoring `stopping`. Changing it needs a Terraform apply. |
+| Lambda code | New `lambda/spot_status.py`, packaged by the existing `archive_file` (`source_dir = lambda`). `handler.py` calls it after the existing processing. |
+| DynamoDB | Same table, keys and 400-day TTL. New attributes and a new partition prefix only; no schema change. |
+
+The collector fails open: API errors, throttling, a missing Spot
+request, stale or ambiguous status, or too little Lambda time are
+recorded or skipped, and the existing processing continues.
+
+**Execution budget.** The collector always runs after the existing
+processing of the same event, and it uses its own EC2 and DynamoDB
+clients (connect 2 s, read 3 s, two attempts, standard retry mode). The
+handler's own DynamoDB, CloudWatch and Discord calls are unchanged.
+
+| Item | Worst case |
+|---|---|
+| One SDK call (DescribeInstances, DescribeSpotInstanceRequests or one DynamoDB call) | 2 × (2 s + 3 s) + backoff ≤ 1 s, plus ≤ 5 s if AWS sends `x-amz-retry-after` = **16 s** |
+| One observation read and saved (2 EC2 calls + 1 PutItem) | **48 s** |
+| Explicit retries (`stopped` only) | waits until about +2 s and +5 s after the first read |
+
+- Before every AWS call: at least 16 s + 2 s must remain, otherwise the
+  collector stops.
+- Before every attempt, including the first: the wait, 48 s and 2 s must
+  fit in the remaining time.
+- So the collector stops with at least 2 s left for the handler to
+  return. If about 88 s remain when it starts and every call takes its
+  worst case, a `stopped` event gets one observation read and saved,
+  and no retry (tested).
+- Not covered by the SDK timeouts: DNS resolution, and a response that
+  keeps sending data slower than the read timeout.
+
+### 12.2 Data model
+
+**Incident row** — the existing `stopped` row (`instance_id` = instance,
+`event_time` = `<stop time>#<event id>`). New attributes, set only on
+incidents created after deployment:
+
+| Attribute | Meaning |
+|---|---|
+| `spot_window_start` | Earliest Spot status time that can belong to this stop: 10 minutes before `stop_at`, or the previous `running` if later |
+| `spot_previous_running_at`, `spot_previous_stop_at` | The last `running` and `stopped` times known when this stop was processed, if earlier |
+| `spot_run_started_at` | Launch time of the run that this stop ended, read from `DescribeInstances` before any restart |
+| `spot_reason` | `CAPACITY`, `PRICE`, `USER`, `EXPERIMENT`, `PENDING` or `UNKNOWN` (initially `UNKNOWN`) |
+| `spot_reason_confirmed` | `true` only for an AWS `instance-stopped-*` code inside the window |
+| `spot_status_code`, `spot_status_message`, `spot_status_update_time` | Raw AWS Spot request status |
+| `spot_evidence_observed_at`, `spot_evidence_phase`, `spot_request_id` | When and at which event the evidence was read |
+| `spot_reason_conflict`, `spot_conflict_codes` | Set when another confirmed code was observed for the same incident |
+| `stopping_at` | Time of the EC2 `stopping` event, if within the window |
+| `interruption_warning_at`, `rebalance_recommendation_at` | Separate signal times, if within the window |
+
+`stop_at`, `running_at`, `recovered_at`, `downtime_seconds`,
+`recovery_proof` and `trigger` keep their meaning.
+`StopToRecoverySeconds` is still measured from `stop_at`, not
+`stopping_at`.
+
+**`~STATE` row** — adds `last_interruption_warning`,
+`last_rebalance_recommendation` and `last_stopping`, each written only if
+newer. `last_spot_warning` is still written for both signal kinds, as
+before, and still drives `trigger=spot_warning_observed`.
+
+**Observation rows** — one per API read, append only:
+
+| Key | Value |
+|---|---|
+| `instance_id` | `spot#<instance id>` (separate partition, so the existing incident queries are not affected) |
+| `event_time` | `<event time>#<event id>#<phase>#<attempt>`; a duplicate delivery of the same event writes nothing |
+| Content | `phase`, `observed_at`, `spot_request_id`, raw status code, message and update time, `request_state`, `max_price`, `interruption_behavior`, `instance_type`, `availability_zone`, EC2 state, `launch_time`, `StateReason` code and message, `classification`, `authoritative`, `attribution`, `incident_key`, `incident_result`, `error`, `expires_at` (event time + 400 days) |
+
+### 12.3 Write rules and concurrency
+
+- An observation is saved before it is attached to an incident and
+  before the next retry, so a later failure cannot lose it.
+- It is attached only if its `Status.UpdateTime` is inside the
+  incident window:
+  - Not before `spot_window_start`, the previous `running`, or the
+    launch of the run that this stop ended.
+  - Before the next restart, with no tolerance: the `running` time, a
+    launch time after the stop, or the run start of a later incident.
+    A status set after the instance started again belongs to a later
+    cycle, even seconds later.
+  - Within 10 minutes after the stop.
+
+  Otherwise it stays as an observation with `attribution` `stale` or
+  `after_incident`.
+- If the status also fits the window of another incident within 20
+  minutes and no restart separates them (for example, `running` events
+  and launch times are both unknown), the `attribution` is `ambiguous`.
+  The observation is kept, and no incident gets a cause from it.
+- Conditional updates protect the incident row:
+  - A confirmed code is written only if no confirmed code exists.
+  - `PENDING` / `UNKNOWN` (including `fulfilled`) is written only if
+    nothing is confirmed and its update time is not older than the
+    stored one. It can never replace a confirmed reason, whatever the
+    order of concurrent Lambda executions.
+  - A different confirmed code for an already confirmed incident is
+    added to `spot_conflict_codes` with `spot_reason_conflict = true`.
+    The first code is kept and the conflict is shown in Discord.
+  - Every incident update requires `event_type = stopped`, so no row
+    is created by an update.
+- Observations made before the `stopped` event (warning, rebalance,
+  `stopping`) are linked when `stopped` is processed. If one of those
+  events arrives after `stopped`, it is linked to the active incident
+  when its time is inside the window. A warning, rebalance or
+  `stopping` time belongs only to the first stop after it. It is not
+  recorded on an incident if a previous stop, or a launch of this run,
+  falls between them.
+- Historical rows are never backfilled. Missing evidence stays
+  `UNKNOWN`.
+
+### 12.4 Notifications
+
+No new notification type and no message per API call.
+
+- Interruption Warning and Rebalance Recommendation messages are
+  unchanged and are sent before any status read. The status at that
+  moment is stored in DynamoDB only. A slow or failed read cannot delay
+  or block these messages. If Discord fails, the status is still read
+  and the original error is raised as before.
+- RECOVERED messages add one line: `Spot cause: <class> (confirmed by
+  AWS Spot request status)` with the code, status time and observation
+  time; or `(not confirmed)`; or `UNKNOWN (no AWS Spot status
+  evidence)`. Conflicts are listed.
+- HTTP DOWN / RECOVERED and deployment messages are unchanged.
+
+### 12.5 Order of processing
+
+| Event | Existing processing | Then |
+|---|---|---|
+| `stopped` | Incident row and `~STATE` saved | Window set; first status read; earlier observations linked; retries at about +2 s and +5 s while unresolved |
+| `running` | Pairing, HTTP 200 polling (Application) or running-only proof (Observability), RECOVERED | One status read |
+| Warning / rebalance | Event row and `~STATE` saved; Discord message | One status read |
+| `stopping` | — (previously ignored) | `last_stopping` and one status read; no incident is opened |
+
+The RECOVERED message uses the evidence stored at that moment. When the
+Observability EC2 recovers in the same invocation as a late `stopped`
+event, it can say `UNKNOWN` although evidence is stored seconds later.
+The DynamoDB row is the record.
+
+### 12.6 Deployment record
+
+- Applied 2026-11-25 JST: 0 added, 3 changed, 0 destroyed (the Lambda
+  function, the role policy and the state-change rule).
+- Deployed `CodeSha256` `cw8JPPcmFYdo5Xsc7YwD4zxK7QsCIw8CAsiINW9oiQo=`.
+  The previous one was `tazsiB2aDUX4rcaLje518P4DioS2M2j0d0aj2faEumY=`.
+- Python tests: 113 (§5). Run them before any further change.
+- The first real interruption is the first production evidence for this
+  section. Follow
+  [Spot Interruption Runbook §9.4](./spot-interruption-runbook.md#94-after-the-next-natural-interruption-read-only)
+  and record the result in a dated document. Do not mark this section
+  verified before that.
+
+### 12.7 Rollback
+
+Roll back if, after an EC2 or Spot event, the Lambda times out, runs
+out of memory or reports errors, or if HTTP monitoring, RECOVERED or
+deployment notifications regress. Inspect first (read only):
+
+```bash
+aws logs filter-log-events --profile gms-admin --region ap-northeast-1 \
+  --log-group-name /aws/lambda/gmsv5-availability \
+  --start-time "$(($(date +%s) - 3600))000" \
+  --filter-pattern '?"Task timed out" ?"Runtime.OutOfMemory" ?ERROR ?"Spot status evidence skipped"'
+```
+
+**A. Feature flag (first choice).** Disables only the collector.
+
+1. In `infra/terraform/availability/main.tf`, set
+   `SPOT_STATUS_COLLECTION = "disabled"`.
+2. Run the tests, `terraform fmt -check`, `terraform validate` and
+   `terraform plan`. Expected: 1 to change
+   (`aws_lambda_function.availability`, environment only), nothing added
+   or destroyed. Apply only that plan.
+3. Effect: `stopping` events are ignored again
+   (`{"ignored": "other state"}`), no status is read, and RECOVERED
+   messages return to the previous text. The IAM read permission and the `stopping` pattern
+   stay. Each `stopping` event costs one short Lambda invocation.
+
+If Terraform cannot be used quickly, change only this variable with the
+AWS CLI. `update-function-configuration --environment` replaces the whole
+map, so read and write back all variables. The map holds names and URLs,
+not secrets.
+
+```bash
+ENV_FILE="$(mktemp)"
+aws lambda get-function-configuration --profile gms-admin --region ap-northeast-1 \
+  --function-name gmsv5-availability --query Environment --output json > "$ENV_FILE"
+python3 - "$ENV_FILE" <<'EOF'
+import json, sys
+path = sys.argv[1]
+env = json.load(open(path))
+env["Variables"]["SPOT_STATUS_COLLECTION"] = "disabled"
+json.dump(env, open(path, "w"))
+EOF
+aws lambda update-function-configuration --profile gms-admin --region ap-northeast-1 \
+  --function-name gmsv5-availability --environment "file://$ENV_FILE" \
+  --query '{State:State,Update:LastUpdateStatus}'
+```
+
+Then make the same change in `main.tf` the same day. `terraform plan`
+must show no changes.
+
+**B. Full Terraform rollback.** Restores the code, IAM policy and rule.
+
+1. Revert the change in Git: `git revert` of its commit, or of the merge
+   commit after merge. The result must equal `a0ff5dc` for
+   `infra/terraform/availability/main.tf` and `lambda/`, with
+   `lambda/spot_status.py` removed.
+2. Run the tests (33 remain), `fmt -check`, `validate` and `plan`.
+   Expected: 3 to change (`aws_lambda_function.availability`,
+   `aws_iam_role_policy.lambda_runtime`,
+   `aws_cloudwatch_event_rule.state`), 0 to add, 0 to destroy. Do not
+   apply a plan that replaces or destroys anything.
+3. After apply, compare `CodeSha256` with the previous value above. If
+   it differs, check that the package contents equal the `a0ff5dc`
+   sources (the archive is rebuilt locally).
+
+**Data in both cases.** Do not change DynamoDB. Observation rows in
+`spot#<instance-id>` expire by the existing 400-day TTL. The previous code
+never reads that partition or the new incident attributes. Keep them as
+evidence.

@@ -1,7 +1,7 @@
 # GMS v5 — EC2 Spot Interruption and Recovery Runbook
 
 - **Owner:** Infrastructure / SRE
-- **Updated:** 2026-11-16 JST; cross-references added 2026-11-19
+- **Updated:** 2026-11-16 JST; cross-references added 2026-11-19; reason evidence (§9) added and deployed 2026-11-25
 - **Scope:** Production Application EC2 and Observability EC2
 - **Evidence:** [2026-11-16 As-Built Section 10](./observability-as-built-2026-11-16.md)
 - **Status:** Operational recovery observed; automated recovery after a future interruption not fully validated.
@@ -77,6 +77,12 @@ additional independent interruptions.
 Current `fulfilled` status does not reveal the full
 historical interruption reason. A missing EventBridge Archive
 does not imply that a warning was never issued.
+
+For interruptions after 2026-11-25 01:35 JST, when the
+reason-evidence change was deployed, read the stored Spot request
+status first (§9). The availability Lambda is designed to capture
+it before the request returns to `fulfilled`. Real capture is not
+yet verified.
 
 ## 4. Application recovery (Application SSM Session)
 
@@ -223,6 +229,171 @@ See [Translation SLO and Alerting Runbook](./observability/translation-slo-alert
   consistent with the acceptable downtime budget.
 - Distinguish Spot stop/start from instance termination/replacement;
   the latter may delete Observability Root EBS data.
+
+## 9. Interruption reason evidence
+
+> **Status (2026-11-25):** deployed at 01:35 JST
+> ([As-Built](./spot-reason-tracking-as-built-2026-11-25.md)). Production configuration is verified. **Real
+> Spot status collection, reason association and cause-bearing
+> RECOVERED messages are not yet verified.** No Spot interruption
+> has occurred since deployment. After the next one, follow §9.4.
+
+Interruptions before this change have no captured reason code.
+Capacity reclamation is suspected for them but not confirmed,
+and they are not backfilled.
+
+### 9.1 Where the reason comes from
+
+The availability Lambda calls `DescribeInstances` (to find the
+Spot request ID) and `DescribeSpotInstanceRequests` at each
+rebalance recommendation, interruption warning, `stopping`,
+`stopped` and `running` event. At `stopped` it retries about
+2 and 5 seconds later while the reason is unresolved. Each
+observation is stored before the next call. The data model is in
+the [Availability Runbook §12](./availability-external-runbook.md#12-spot-interruption-reason-evidence).
+
+Only the Spot request status code confirms a cause:
+
+| AWS status code | Classification | Confirms a cause |
+|---|---|---|
+| `instance-stopped-no-capacity` | `CAPACITY` | Yes |
+| `instance-stopped-by-price` | `PRICE` | Yes |
+| `instance-stopped-by-user` | `USER` | Yes |
+| `instance-stopped-by-experiment` | `EXPERIMENT` | Yes |
+| `marked-for-stop`, `marked-for-stop-by-experiment` | `PENDING` | No |
+| `fulfilled` | `UNKNOWN` | No |
+| Any other or no code | `UNKNOWN` | No |
+
+The raw AWS code is always stored, including for `UNKNOWN`.
+Meanings follow the AWS
+[Spot request status codes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-request-status.html)
+and the
+[request status lifecycle](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instances-request-status-lifecycle.html).
+
+Never conclude `CAPACITY` from any of these alone:
+
+- An interruption warning or a rebalance recommendation.
+- A low Spot price compared with the maximum price.
+- The EC2 `StateReason`. `Server.SpotInstanceShutdown` covers
+  both price and capacity in the AWS description, so it cannot
+  separate them. It is stored as context only.
+
+### 9.2 Investigation procedure (Mac Terminal, read-only)
+
+1. Find the incident row (`stopped`) and its reason fields:
+
+   ~~~bash
+   aws dynamodb query \
+     --profile gms-admin --region ap-northeast-1 \
+     --table-name gmsv5-availability-events \
+     --key-condition-expression 'instance_id = :pk' \
+     --expression-attribute-values '{":pk":{"S":"i-0decf6bc205e273d9"}}' \
+     --no-scan-index-forward --max-items 20 \
+     --projection-expression 'event_time, event_type, stop_at, stopping_at, running_at, recovered_at, spot_reason, spot_reason_confirmed, spot_status_code, spot_status_update_time, spot_evidence_observed_at, spot_reason_conflict, spot_conflict_codes, interruption_warning_at, rebalance_recommendation_at'
+   ~~~
+
+2. Read every observation around that time, including rejected
+   ones:
+
+   ~~~bash
+   aws dynamodb query \
+     --profile gms-admin --region ap-northeast-1 \
+     --table-name gmsv5-availability-events \
+     --key-condition-expression 'instance_id = :pk AND event_time BETWEEN :from AND :to' \
+     --expression-attribute-values '{":pk":{"S":"spot#i-0decf6bc205e273d9"},":from":{"S":"2026-11-25T00:00:00Z"},":to":{"S":"2026-11-25T23:59:59Z~"}}'
+   ~~~
+
+   Use `spot#i-021170e56849c597b` for the Observability EC2.
+
+3. Interpret:
+   - `spot_reason_confirmed = true`: the AWS status code in
+     `spot_status_code` is the cause. Check
+     `spot_status_update_time` against `stop_at`.
+   - `spot_reason_conflict = true`: AWS returned more than one
+     stop code for this incident. The first one is kept; the
+     others are in `spot_conflict_codes`. Report both; do not
+     choose one.
+   - Not confirmed: the reason is unknown. `PENDING` only means
+     the stop was in progress when observed.
+   - Observation `attribution`: `in_window` was attached;
+     `stale` predates this incident (for example the previous
+     interruption's status); `after_incident` belongs to a later
+     cycle; `ambiguous` fits more than one incident and was
+     not attached to any; `unavailable` means the API call failed
+     (see `error`); `legacy_incident` is an incident created
+     before this change.
+4. If no observation exists, check the Lambda log group
+   `/aws/lambda/gmsv5-availability` for `Spot status` lines, then
+   fall back to CloudTrail and the AWS commands in §3.
+
+### 9.3 Limits
+
+- EventBridge delivery is best effort. If AWS has already
+  returned the request to `fulfilled` when the Lambda reads it,
+  the reason stays `UNKNOWN`.
+- The AWS documentation does not state how long an
+  `instance-stopped-*` code stays visible for a persistent
+  request with interruption behavior `stop`, or whether it is
+  shown as `disabled` or `fulfilled` while stopped. Real capture
+  rates are unknown until production data exists.
+- Attachment uses time windows: up to 10 minutes before and
+  after the stop, never before the launch of the run that the
+  stop ended, and strictly before the next restart (no
+  tolerance). If `running` events and launch times are missing
+  during fast cycles, a correct status can be rejected as
+  `stale`, `after_incident` or `ambiguous`. The rules reject
+  rather than attach a status to the wrong incident. This is
+  tested locally, not with real AWS timing.
+- The interruption warning and the rebalance recommendation are
+  context, not causes.
+
+### 9.4 After the next natural interruption (read-only)
+
+Purpose: the first production verification of §9. Do not create an
+interruption: no EC2 stop, no Lambda invoke, no synthetic event, no
+DynamoDB edit.
+
+1. **Fix the time range.** From the Discord INTERRUPTION WARNING or
+   RECOVERED message, or from the incident row (§9.2 step 1), note
+   `stop_at` and `running_at` in UTC.
+2. **Incident row.** Run §9.2 step 1. Record `spot_reason`,
+   `spot_reason_confirmed`, `spot_status_code`,
+   `spot_status_update_time`, `spot_evidence_observed_at`,
+   `spot_evidence_phase`, `stopping_at`, the signal times and any
+   conflict fields.
+3. **Observation rows.** Run §9.2 step 2 for that day. For each row,
+   record `phase`, `attempt`, `status_code`, `classification`,
+   `status_update_time`, `observed_at`, `attribution`,
+   `incident_result` and `error`.
+4. **Lambda logs.** Use `START` and `END` as epoch milliseconds,
+   for example from `stop_at` minus 10 minutes to `running_at` plus
+   10 minutes:
+
+   ~~~bash
+   aws logs filter-log-events --profile gms-admin --region ap-northeast-1 \
+     --log-group-name /aws/lambda/gmsv5-availability \
+     --start-time "$START" --end-time "$END" \
+     --filter-pattern '?"Spot status" ?"Task timed out" ?ERROR ?REPORT'
+   ~~~
+
+   Record the `Spot status ... result=` lines, any `Spot status
+   evidence skipped`, and `Duration` and `Max Memory Used` from the
+   `REPORT` line of the `stopped` invocation.
+5. **Current AWS status (independent).** Run the
+   `describe-spot-instance-requests` command in §3. It may already
+   show `fulfilled`; that does not contradict stored evidence.
+6. **Discord.** Check the RECOVERED message for the `Spot cause:`
+   line and compare it with step 2.
+7. **Judge and record** against the acceptance table in the
+   [As-Built §7](./spot-reason-tracking-as-built-2026-11-25.md#7-next-naturally-occurring-interruption).
+   Record `UNKNOWN`, `ambiguous`, `stale` or `unavailable` results as
+   they are: they measure the capture rate. Write the result in a new
+   dated document or an addendum to the As-Built. Do not edit the
+   2026-11-25 evidence.
+
+If the invocation timed out, ran out of memory or broke HTTP
+monitoring or notifications, follow the rollback in the
+[Availability Runbook §12.7](./availability-external-runbook.md#127-rollback).
 
 **AWS reference:**
 https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-interruptions.html
