@@ -5,6 +5,9 @@ CloudWatch alarm evaluation itself cannot be tested locally: the M-of-N tests
 below check the Terraform values against a model of complete-data
 evaluation, not CloudWatch.
 """
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import no_network  # noqa: E402,F401  Blocks real network access (no AWS calls).
 import importlib.util
 import json
 import os

@@ -15,7 +15,9 @@
 > promote one class to another.
 >
 > - **Local test:** unit tests on the Mac with the fake DynamoDB, stub
->   CloudWatch and botocore's Stubber. No AWS calls.
+>   CloudWatch and botocore's Stubber. No AWS calls: since 2026-11-28
+>   `tests/no_network.py` blocks every non-loopback connection for the
+>   test process, and the last test checks that none was attempted.
 > - **Production configuration:** AWS output inspected by the Operator
 >   after apply. Not re-queried while writing this document.
 > - **Integration test:** CloudWatch behavior measured with temporary
@@ -177,12 +179,46 @@ The alarm is unchanged.
   DynamoDB lookup uses a low-level (thread-safe) client. Guaranteed limits
   and estimates are separated in Runbook §13.11.
 
+**Pre-apply findings (2026-11-28, third commit).** The pre-apply check
+for the stage `off` re-apply was stopped before apply, on two findings:
+
+- The DynamoDB client was created inside a worker thread from boto3's
+  default Session, which boto3 documents as not thread safe.
+- Abandoned workers had no count limit.
+
+Fixes:
+
+- Both clients are now created on the main thread, only when a lookup is
+  about to run, and reused. Workers only make the read call.
+- At most 2 workers exist per execution environment, abandoned ones
+  included, enforced with a `BoundedSemaphore`. A slot is taken before
+  the thread starts and released when the worker ends, including on
+  error. With no free slot the line is `unavailable (busy)`, without
+  waiting.
+- A local check script had sent read requests to AWS with dummy
+  credentials (rejected, no data). The test suite now blocks the network
+  itself instead of relying on fake credentials.
+
+Details: Runbook §13.11.
+
 **Tests (local test).**
 
-- 240 tests in total, all passing.
+- 257 tests in total, all passing, five consecutive runs.
   - Burn rate state, messages and shadow lifecycle: 68.
-  - Responder context and deadlines: 59.
-  - Other: 113 (unchanged).
+  - Responder context, deadlines, clients and worker limit: 73.
+  - Network guard: 3.
+  - Other: 113 (unchanged except the guard import).
+- Worker limit, measured with real threads and an API that never
+  returns:
+  - 25 consecutive invocations: at most 2 workers. From the 3rd on, the
+    lines say `busy`.
+  - 12 concurrent callers: exactly 2 started; 10 got `busy`, without
+    waiting.
+  - Slots stay taken after the caller stops waiting. They become free
+    again when the workers end, including after exceptions and a failed
+    thread start.
+  - A late result never reached a later message. An abandoned worker
+    made no table call after the handler returned.
 - The shadow tests cover:
   - ALARM → OK;
   - OK → INSUFFICIENT_DATA → OK;
@@ -199,7 +235,8 @@ The alarm is unchanged.
   - 7 were updated for the new message format and for the design
     constants that left the Lambda; their intent is unchanged.
 - Mutation runs on copies of the code detected all mutations:
-  - 28 of 28 for context, shadow ledger and deadline;
+  - 38 of 38 for context, shadow ledger, deadline, worker limit and
+    client creation;
   - 10 of 10 for state handling.
 - botocore's Stubber validated the GetMetricData and DynamoDB GetItem
   requests against the API models.
@@ -299,15 +336,19 @@ unavailable (TimeoutError)` and `Last 60 completed min: unavailable
   urlopen 8 s per socket operation) is not bounded by this change.
 - **Abandoned lookups:** a lookup cut off at the deadline keeps running
   in a background thread until its SDK timeouts end. Its result is
-  discarded.
+  discarded. At most 2 such workers exist; while both are held, context
+  lines say `busy`.
+- **Client creation time:** client creation on the main thread is
+  counted against the 30 s budget but is not interruptible once started.
+  It is estimated, not bounded.
 
 ## 9. Rollback
 
 Runbook §13.8. In short:
 
 - **Stage `off`:** messages are already stopped.
-- **Message redesign:** revert its two commits (`a70f1b3` and the review
-  fix). The plan has 2 changes: the Lambda code goes back to `d81c157`,
+- **Message redesign:** revert its three commits (`a70f1b3`, `c209503`
+  and the pre-apply fix). The plan has 2 changes: the Lambda code goes back to `d81c157`,
   and the IAM statement is removed.
 - **Whole feature:** revert both commits. The 4 resources are
   destroyed and the Lambda returns to the 2026-11-25 build.

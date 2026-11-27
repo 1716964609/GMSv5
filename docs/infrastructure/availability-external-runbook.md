@@ -43,8 +43,9 @@
 > ([As-Built](./availability-burn-rate-as-built-2026-11-27.md)). The
 > 2026-11-28 message redesign (§13.4, §13.11: current HTTP state and the
 > last 60 minutes instead of an observed burn rate) is committed and tested
-> locally (240 tests in total) but **not applied**. Its shadow ledger
-> and hard lookup deadline were added on 2026-11-28 after review.
+> locally (257 tests in total) but **not applied**. Its shadow ledger,
+> hard lookup deadline and lookup thread limit were added on 2026-11-28
+> after review.
 
 ## 1. Architecture
 
@@ -1103,6 +1104,8 @@ account ID.
   message whose three attempts all fail is lost (log line only).
 - The 25 s left for `notify()` and its record is a reserve the lookups
   never use, not a bound on `notify()` itself (§13.11).
+- An abandoned lookup holds one of the 2 worker slots until its SDK call
+  ends. While both are held, the context lines say `unavailable (busy)`.
 - The alarm sees only the external ingress probe (HTTP 200 on `/`), not
   translation API success. P3 covers translation metrics separately.
 
@@ -1159,30 +1162,41 @@ not bound a call. The bound is a wall-clock deadline in the code:
 
 | Limit | Guaranteed by | Value |
 |---|---|---|
-| Deadline for all lookups of one invocation | Code (each call runs in a daemon thread; the caller waits only until the deadline, then abandons it) | `min(t0 + 30 s, Lambda end − 25 s)`, `t0` = start of the burn rate handling, before `accept` |
-| Lookups never use the last 25 s of the Lambda | Code (same deadline) | Lambda timeout 90 s; context waits end ≥ 25 s before it |
-| A lookup is not started | Code | When less than 2 s remain before the deadline |
+| Deadline for all lookups of one invocation | Code (each call runs in a worker thread; the caller waits only until the deadline, then abandons it) | `min(t0 + 30 s, Lambda end − 25 s)`, `t0` = start of the burn rate handling, before `accept` |
+| Lookups never wait into the last 25 s of the Lambda | Code (same deadline) | Lambda timeout 90 s |
+| A lookup or client creation is not started | Code | When less than 2 s remain before the deadline |
 | Pages | Code | At most 2 GetMetricData calls, both under the same deadline |
+| Lookup worker threads per execution environment | Code (`BoundedSemaphore(2)`, taken before the thread starts, released only when the worker ends, also on error) | At most 2, including abandoned ones. With none free the line is `unavailable (busy)`, without waiting |
 | Invocation length, lease | Lambda timeout | 90 s, equal to the lease (§13.4) |
 
-| Estimate (SDK and network dependent) | Value |
+| Estimate (SDK, CPU and network dependent) | Value |
 |---|---|
+| Client creation (both clients, once per execution environment, on the main thread) | About 7 ms and 2 MB measured locally; slower on a cold 128 MB Lambda (not measured). It counts against the 30 s budget, because the deadline is fixed at `t0`, but it cannot be interrupted: a creation that started with ≥ 2 s left is not cut off. It is local work (service model, endpoint, credentials from the Lambda environment), with no network call |
 | One lookup when AWS answers | Tens of ms |
-| One lookup when timeouts fire | About 10–13 s: 2 attempts × (2 s connect + 3 s per read) plus standard-mode backoff. DNS is not covered by the connect timeout. A slow trickle can extend a read. The deadline cuts this off |
+| One lookup when timeouts fire | About 10–13 s: 2 attempts × (2 s connect + 3 s per read) plus standard-mode backoff. DNS is not covered by the connect timeout. A slow trickle can extend a read. The deadline cuts the wait off |
+| How long an abandoned worker runs | Until its SDK call ends (same estimate). It cannot hold more than 2 slots |
 | `notify()` | `urlopen` timeout 8 s per socket operation. On a cold container `relay_token()` calls SSM with SDK defaults (60 s connect and read, legacy retries). The delivery record uses the handler's table client with SDK defaults. Existing code shared with all notifications; not bounded by this change |
 
-So the 30 s and the 25 s are guaranteed as limits on the lookups: they
-never wait past the deadline and never eat into the last 25 s. They do
-not guarantee that `notify()` and the record finish in 25 s. If they
-overrun, the Lambda times out and its retry sends again (a possible
-duplicate, §13.4).
+So the 30 s and the 25 s are guaranteed as limits on waiting for lookups.
+They do not bound client creation once started, nor `notify()` and the
+record. If those overrun, the Lambda times out and its retry sends again
+(a possible duplicate, §13.4).
 
-An abandoned lookup keeps running in its thread until its own SDK
-timeouts end (estimate up to about 13 s), possibly across a Lambda freeze.
-Its result is discarded. The clients are low-level boto3 clients, which
-are thread safe (boto3 resources are not), separate from the handler's.
-Measured locally: under 1 ms for the count and about 2 MB more memory
-for the clients; the Lambda used at most 95 MB of 128 MB before.
+**Threads.**
+
+- Both low-level clients are created on the main thread, only when the
+  first lookup of an invocation is about to run (never at import, in
+  the HTTP probe path, or for an event owed nothing), and reused for the
+  life of the execution environment.
+- A creation failure makes both lines `unavailable (<error>)` and is not
+  retried within the invocation. The message is still sent.
+- Workers never create a boto3 Session, client or resource. They only
+  make the one read call (`GetItem` or `GetMetricData`) on a client
+  they are handed.
+- A worker's result goes to a buffer owned by that one call, so a result
+  that arrives after the deadline is discarded. It cannot reach a later
+  message, a state write or another event.
+- A worker sends no message, writes nothing and logs nothing.
 
 **IAM.** Statement `ReadBurnRateContextMetric`: `cloudwatch:GetMetricData`
 on `*`, condition `aws:RequestedRegion = ap-northeast-1`. GetMetricData

@@ -2,6 +2,9 @@
 
 No AWS calls: DynamoDB and EC2 are fakes; boto3 client/resource creation fails.
 """
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import no_network  # noqa: E402,F401  Blocks real network access (no AWS calls).
 import importlib.util
 import os
 import sys

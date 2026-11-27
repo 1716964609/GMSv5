@@ -4,6 +4,9 @@ CloudWatch is a scripted stub and DynamoDB the in-memory FakeTable. The
 production HTTP state row and HTTPUp metric are never read here; that
 connection is checked in SHADOW (Availability Runbook §13.5).
 """
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import no_network  # noqa: E402,F401  Blocks real network access (no AWS calls).
 import json
 import math
 import os
@@ -597,6 +600,10 @@ class HardDeadlineTests(unittest.TestCase):
             raise AssertionError("released")
         return call
 
+    def setUp(self):
+        wait_idle()
+        self.addCleanup(wait_idle)
+
     def test_hung_lookups_are_abandoned_at_the_deadline(self):
         import time as real_time
         release = threading.Event()
@@ -633,6 +640,265 @@ class HardDeadlineTests(unittest.TestCase):
         self.assertEqual(brc.bounded(lambda: 7, 5), 7)
         with self.assertRaises(ZeroDivisionError):
             brc.bounded(lambda: 1 / 0, 5)
+
+
+def wait_idle(timeout=10):
+    """Wait until every lookup worker has ended (slots free) between tests."""
+    import time as real_time
+    end = real_time.monotonic() + timeout
+    while brc.active_workers() and real_time.monotonic() < end:
+        real_time.sleep(0.01)
+    assert brc.active_workers() == 0, "lookup workers still running"
+
+
+class FakeDynamoDB:
+    def __init__(self, item, gate=None):
+        self.item, self.gate, self.threads = item, gate, []
+
+    def get_item(self, **kwargs):
+        self.threads.append(threading.current_thread().name)
+        if self.gate:
+            self.gate.wait(10)
+        return {"Item": self.item}
+
+
+class FakeCloudWatch:
+    def __init__(self, body):
+        self.body, self.threads = body, []
+
+    def get_metric_data(self, **kwargs):
+        self.threads.append(threading.current_thread().name)
+        return self.body
+
+
+RAW_UP = {"instance_id": {"S": "http#sunlightjetrans.com"}, "event_time": {"S": "~STATE"},
+          "last_slot": {"S": "2026-11-24T00:08"}, "http_status": {"S": "up"},
+          "http_failures": {"N": "0"}}
+
+
+class WorkerTestCase(unittest.TestCase):
+    """Short limits so that hung workers can be exercised quickly."""
+
+    def setUp(self):
+        wait_idle()
+        self.release = threading.Event()
+        self.addCleanup(wait_idle)
+        self.addCleanup(self.release.set)  # runs first (LIFO)
+        patcher = patch.object(brc, "MIN_START_SECONDS", 0.01)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def hung(self, value="late"):
+        def fn(*args, **kwargs):
+            self.release.wait(10)
+            return value
+        return fn
+
+    def context(self, http_row, metrics=None, budget=0.15):
+        metrics = metrics or (lambda s, e, call: brc.fetch_metric(StubCloudWatch(
+            page(*minutes("O" * 60))), s, e, call))
+        return brc.Context(http_row=http_row, metrics=metrics, now=lambda: NOW,
+                           budget_seconds=budget)
+
+
+class ClientCreationTests(WorkerTestCase):
+    def setUp(self):
+        super().setUp()
+        brc.cloudwatch.cache_clear()
+        brc.dynamodb.cache_clear()
+        self.addCleanup(brc.cloudwatch.cache_clear)
+        self.addCleanup(brc.dynamodb.cache_clear)
+        self.created = []
+        self.ddb = FakeDynamoDB(RAW_UP)
+        self.cw = FakeCloudWatch(page(*minutes("O" * 60)))
+
+        def client(name, **kwargs):
+            self.created.append((name, threading.current_thread() is threading.main_thread()))
+            return {"dynamodb": self.ddb, "cloudwatch": self.cw}[name]
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError(f"Session or resource on {threading.current_thread().name}")
+        for target, effect in (("boto3.client", client), ("boto3.resource", forbidden),
+                               ("boto3.Session", forbidden),
+                               ("boto3.session.Session", forbidden)):
+            patcher = patch(target, side_effect=effect)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        env = patch.dict(os.environ, {"TABLE_NAME": "gmsv5-availability-events"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_clients_are_created_on_the_main_thread_and_reused(self):
+        ctx = brc.production(lambda: NOW)
+        self.assertEqual(self.created, [])  # constructing a Context creates nothing
+        lines = ctx.lines(br.state_time(T1))
+        self.assertEqual(lines[0], "Now: UP (last check 09:08 JST)")
+        self.assertTrue(lines[1].startswith("Last 60 completed min (08:06 JST"))
+        brc.production(lambda: NOW).lines(br.state_time(T1))
+        self.assertEqual(self.created, [("dynamodb", True), ("cloudwatch", True)])
+        # Workers only made the read calls.
+        self.assertEqual(set(self.ddb.threads + self.cw.threads), {"burn-rate-context"})
+        self.assertEqual((len(self.ddb.threads), len(self.cw.threads)), (2, 2))
+
+    def test_client_creation_failure_only_drops_the_lines(self):
+        brc.dynamodb.cache_clear()
+        with patch.object(brc, "dynamodb", side_effect=RuntimeError("no endpoint")) as make:
+            ctx = brc.production(lambda: NOW)
+            lines = ctx.lines(br.state_time(T1))
+        self.assertEqual(lines, ["Now: UNKNOWN — HTTP state unavailable (RuntimeError)",
+                                 "Last 60 completed min: unavailable (RuntimeError)"])
+        self.assertEqual(make.call_count, 1)  # not retried within one invocation
+        self.assertEqual(brc.active_workers(), 0)
+
+    def test_client_creation_failure_still_notifies(self):
+        h = Harness()
+        with patch.object(brc, "cloudwatch", side_effect=RuntimeError("model")):
+            result = br.handle(alarm_event("ALARM", T1), table=h.table, notify=h.notify,
+                               now=lambda: h.clock, alarm_name=NAME, alarm_arn=ARN,
+                               delivery="enabled", context=brc.production(lambda: NOW))
+        self.assertEqual(result["sent"], ["alarm"])
+        self.assertIn("Last 60 completed min: unavailable (RuntimeError)", h.sent[0])
+
+    def test_no_client_without_time(self):
+        ctx = brc.Context(prepare=brc.prepare_production, now=lambda: NOW,
+                          lambda_remaining=lambda: brc.NOTIFY_RESERVE_SECONDS)
+        self.assertIn("(time budget)", ctx.lines(br.state_time(T1))[0])
+        self.assertEqual(self.created, [])
+
+    def test_probe_path_never_loads_the_context_module(self):
+        import ast
+        tree = ast.parse((ROOT / "lambda" / "handler.py").read_text())
+        top_level = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+        names = {a.name for n in top_level for a in n.names} | {
+            n.module for n in top_level if isinstance(n, ast.ImportFrom)}
+        self.assertNotIn("burn_rate_context", names)
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                        and n.name == "burn_rate_context")
+        self.assertIn("import burn_rate_context", ast.unparse(function))
+
+
+class WorkerLimitTests(WorkerTestCase):
+    def test_hung_api_25_invocations_never_exceed_two_workers(self):
+        peak, lines = 0, []
+        for _ in range(25):
+            ctx = self.context(self.hung(), metrics=lambda s, e, call: brc.fetch_metric(
+                type("Hung", (), {"get_metric_data": staticmethod(self.hung())})(), s, e, call))
+            lines.append(ctx.lines(br.state_time(T1)))
+            alive = sum(1 for th in threading.enumerate() if th.name == "burn-rate-context")
+            peak = max(peak, brc.active_workers(), alive)
+        self.assertEqual((brc.MAX_WORKERS, peak), (2, 2))  # the approved limit, not just the constant
+        # 1st and 2nd: the Now worker is abandoned at the deadline, which leaves
+        # no time for the metric lookup. From the 3rd on, both slots are taken.
+        self.assertEqual(lines[0], ["Now: UNKNOWN — HTTP state unavailable (deadline)",
+                                    "Last 60 completed min: unavailable (time budget)"])
+        self.assertEqual(lines[1], lines[0])
+        self.assertEqual(lines[-1], ["Now: UNKNOWN — HTTP state unavailable (busy)",
+                                     "Last 60 completed min: unavailable (busy)"])
+
+    def test_concurrent_callers_never_exceed_the_limit(self):
+        callers, barrier, outcomes, peaks = 12, threading.Barrier(12), [], []
+        lock = threading.Lock()
+
+        def caller():
+            barrier.wait()
+            try:
+                brc.bounded(self.hung(), 1.0)
+                outcome = "value"
+            except brc.WorkersBusy:
+                outcome = "busy"
+            except brc.DeadlineExceeded:
+                outcome = "deadline"
+            with lock:
+                outcomes.append(outcome)
+                peaks.append(brc.active_workers())
+        threads = [threading.Thread(target=caller) for _ in range(callers)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(5)
+        self.assertEqual(outcomes.count("deadline"), 2)
+        self.assertEqual(outcomes.count("busy"), callers - 2)
+        self.assertLessEqual(max(peaks), brc.MAX_WORKERS)
+
+    def test_slot_is_released_only_when_the_worker_ends(self):
+        for _ in range(brc.MAX_WORKERS):
+            with self.assertRaises(brc.DeadlineExceeded):
+                brc.bounded(self.hung(), 0.05)
+        # The caller stopped waiting, but the slots stay taken.
+        with self.assertRaises(brc.WorkersBusy):
+            brc.bounded(lambda: 1, 1.0)
+        self.release.set()
+        wait_idle()
+        self.assertEqual(brc.bounded(lambda: 1, 1.0), 1)  # reusable
+
+    def test_slot_is_released_after_an_exception(self):
+        for _ in range(10):
+            with self.assertRaises(ZeroDivisionError):
+                brc.bounded(lambda: 1 / 0, 1.0)
+        self.assertEqual(brc.active_workers(), 0)
+        self.assertEqual([brc.bounded(lambda: i, 1.0) for i in range(5)], list(range(5)))
+
+    def test_slot_is_released_when_the_thread_cannot_start(self):
+        with patch.object(threading.Thread, "start", side_effect=RuntimeError("can't start")):
+            for _ in range(5):
+                with self.assertRaises(RuntimeError):
+                    brc.bounded(lambda: 1, 1.0)
+        self.assertEqual(brc.active_workers(), 0)
+        self.assertEqual(brc.bounded(lambda: 2, 1.0), 2)
+
+    def test_busy_does_not_wait(self):
+        import time as real_time
+        for _ in range(brc.MAX_WORKERS):
+            with self.assertRaises(brc.DeadlineExceeded):
+                brc.bounded(self.hung(), 0.05)
+        began = real_time.monotonic()
+        with self.assertRaises(brc.WorkersBusy):
+            brc.bounded(lambda: 1, 5.0)
+        self.assertLess(real_time.monotonic() - began, 0.1)
+
+    def test_late_result_never_reaches_a_later_message(self):
+        down = http_row(last_slot="2026-11-24T00:08", http_status="down", http_failures=9,
+                        first_fail_at="2026-11-24T00:00:00Z")
+        first = self.context(self.hung(down))
+        self.assertEqual(first.now_text(), "Now: UNKNOWN — HTTP state unavailable (deadline)")
+        self.release.set()
+        wait_idle()  # the late DOWN row has now been returned and discarded
+        up = http_row(last_slot="2026-11-24T00:08", http_status="up", http_failures=0)
+        h = Harness()
+        result = br.handle(alarm_event("ALARM", T1), table=h.table, notify=h.notify,
+                           now=lambda: h.clock, alarm_name=NAME, alarm_arn=ARN,
+                           delivery="enabled", context=self.context(lambda: up, budget=5))
+        self.assertEqual(result["sent"], ["alarm"])
+        self.assertIn("Now: UP (last check 09:08 JST)", h.sent[0])
+        self.assertNotIn("DOWN —", h.sent[0])
+        self.assertEqual(first.now_text().startswith("Now: UNKNOWN"), True)
+
+    def test_busy_and_timeouts_still_notify(self):
+        for _ in range(brc.MAX_WORKERS):
+            with self.assertRaises(brc.DeadlineExceeded):
+                brc.bounded(self.hung(), 0.05)
+        h = Harness()
+        result = br.handle(alarm_event("ALARM", T1), table=h.table, notify=h.notify,
+                           now=lambda: h.clock, alarm_name=NAME, alarm_arn=ARN,
+                           delivery="enabled", context=self.context(lambda: {}, budget=5))
+        self.assertEqual(result["sent"], ["alarm"])
+        self.assertIn("Now: UNKNOWN — HTTP state unavailable (busy)", h.sent[0])
+        self.assertIn("Last 60 completed min: unavailable (busy)", h.sent[0])
+        self.assertEqual(h.row()["notified_state"], "ALARM")
+
+    def test_abandoned_worker_makes_no_writes_or_messages(self):
+        h = Harness()
+        writes_before = list(h.table.calls)
+        result = br.handle(alarm_event("ALARM", T1), table=h.table, notify=h.notify,
+                           now=lambda: h.clock, alarm_name=NAME, alarm_arn=ARN,
+                           delivery="enabled", context=self.context(self.hung({"x": 1})))
+        calls_at_return = list(h.table.calls)
+        self.release.set()
+        wait_idle()
+        self.assertEqual(result["sent"], ["alarm"])
+        self.assertEqual(h.table.calls, calls_at_return)  # nothing after the handler returned
+        self.assertEqual(len(h.sent), 1)
+        self.assertGreater(len(calls_at_return), len(writes_before))
 
 
 class LambdaWiringTests(unittest.TestCase):

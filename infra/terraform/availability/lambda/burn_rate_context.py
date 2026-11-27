@@ -19,8 +19,15 @@ Time bound. SDK timeouts are per socket operation, so they do not bound a
 call. Each lookup therefore runs in a daemon thread and is waited for only
 until the invocation's lookup deadline: 30 s after the Context is created,
 and never later than 25 s before the Lambda timeout. A lookup still running
-at the deadline is abandoned (its result is discarded). Only thread-safe
-low-level clients are used, so an abandoned call cannot disturb a later one.
+at the deadline is abandoned (its result is discarded).
+
+Threads. The low-level clients are created on the calling (main) thread,
+once per execution environment, and only when a lookup is about to run;
+workers only call a read API on a client they are handed and never touch a
+boto3 Session. At most MAX_WORKERS workers exist per execution environment,
+counting abandoned ones: a worker slot is taken before the thread starts
+and released only when the worker itself ends. With no free slot the
+lookup is skipped ("busy") without waiting.
 The metric, dimension and region are fixed here; nothing from the event
 selects what is read. No burn rate, availability or error budget is computed.
 """
@@ -56,6 +63,22 @@ BUDGET_SECONDS = 30          # All context lookups of one invocation.
 NOTIFY_RESERVE_SECONDS = 25  # Lambda time the lookups never eat into.
 MIN_START_SECONDS = 2        # Do not start a lookup with less time than this.
 MAX_PAGES = 2                # 60 datapoints fit in one page; NextToken is unexpected.
+MAX_WORKERS = 2              # Lookup threads per execution environment, incl. abandoned.
+
+WORKER_SLOTS = threading.BoundedSemaphore(MAX_WORKERS)
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE = [0]
+
+
+def active_workers() -> int:
+    """Workers currently running (including abandoned ones). For logs and tests."""
+    with _ACTIVE_LOCK:
+        return _ACTIVE[0]
+
+
+def _count(delta: int):
+    with _ACTIVE_LOCK:
+        _ACTIVE[0] += delta
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -72,10 +95,21 @@ class DeadlineExceeded(Exception):
     """The lookup was still running at the deadline and was abandoned."""
 
 
+class WorkersBusy(Exception):
+    """MAX_WORKERS lookup threads are still running; not waiting for one."""
+
+
 def bounded(fn, timeout: float):
-    """Run fn() in a daemon thread and wait at most timeout seconds (wall clock)."""
+    """Run fn() in a daemon thread and wait at most timeout seconds (wall clock).
+
+    fn must only call a read API on a client created by the caller. Its result
+    goes to a box owned by this call alone, so a late result is discarded.
+    """
     if timeout < MIN_START_SECONDS:
         raise BudgetExhausted()
+    if not WORKER_SLOTS.acquire(blocking=False):
+        raise WorkersBusy()
+    _count(+1)
     box = {}
 
     def run():
@@ -83,9 +117,18 @@ def bounded(fn, timeout: float):
             box["value"] = fn()
         except BaseException as exc:  # noqa: BLE001 - re-raised in the caller.
             box["error"] = exc
+        finally:
+            # Released when the worker ends, not when the caller stops waiting.
+            _count(-1)
+            WORKER_SLOTS.release()
 
     worker = threading.Thread(target=run, name="burn-rate-context", daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except BaseException:
+        _count(-1)
+        WORKER_SLOTS.release()
+        raise
     worker.join(timeout)
     if worker.is_alive():
         raise DeadlineExceeded()
@@ -207,14 +250,18 @@ def now_line(info: dict, now: datetime) -> str:
     return f"Now: UNKNOWN — {info.get('why', 'HTTP state unavailable')}"
 
 
-def fetch_http_row(client, table_name: str) -> dict:
+def deserializer():
     from boto3.dynamodb.types import TypeDeserializer
 
+    return TypeDeserializer()
+
+
+def fetch_http_row(client, table_name: str, types=None) -> dict:
+    types = types or deserializer()
     response = client.get_item(
         TableName=table_name, ConsistentRead=True,
         Key={name: {"S": value} for name, value in HTTP_KEY.items()})
-    deserializer = TypeDeserializer()
-    return {k: deserializer.deserialize(v) for k, v in (response.get("Item") or {}).items()}
+    return {k: types.deserialize(v) for k, v in (response.get("Item") or {}).items()}
 
 
 # ------------------------------------------------------ Last 60 minutes ----
@@ -346,6 +393,8 @@ def error_name(exc: Exception) -> str:
         return "time budget"
     if isinstance(exc, DeadlineExceeded):
         return "deadline"
+    if isinstance(exc, WorkersBusy):
+        return "busy"
     if isinstance(exc, QueryFailed):
         return str(exc)
     response = getattr(exc, "response", None)
@@ -366,13 +415,20 @@ class Context:
     now():                      wall clock, UTC
     lambda_remaining():         optional, seconds left in the Lambda invocation
 
+    prepare():                  optional; returns (http_row, metrics) bound to clients.
+                                Called once, on the calling thread, before the
+                                first lookup; never at construction.
+
     Deadline = min(creation + budget_seconds, Lambda end - NOTIFY_RESERVE_SECONDS),
-    fixed when the Context is created.
+    fixed when the Context is created. Client creation in prepare() counts
+    against it but cannot be interrupted.
     """
 
-    def __init__(self, *, http_row, metrics, now, lambda_remaining=None,
-                 clock=time.monotonic, log=None, budget_seconds=BUDGET_SECONDS):
+    def __init__(self, *, now, http_row=None, metrics=None, prepare=None,
+                 lambda_remaining=None, clock=time.monotonic, log=None,
+                 budget_seconds=BUDGET_SECONDS):
         self.http_row, self.metrics, self.now = http_row, metrics, now
+        self.prepare, self.prepared, self.prepare_error = prepare, prepare is None, None
         self.clock, self.log = clock, log
         start = clock()
         self.deadline = start + budget_seconds
@@ -387,14 +443,29 @@ class Context:
     def call(self, fn):
         return bounded(fn, self.remaining())
 
+    def lookups(self):
+        """(http_row, metrics). Clients are created here, on the calling thread."""
+        if not self.prepared:
+            self.prepared = True
+            try:
+                if self.remaining() < MIN_START_SECONDS:
+                    raise BudgetExhausted()
+                self.http_row, self.metrics = self.prepare()
+            except Exception as exc:  # noqa: BLE001 - reported per line below.
+                self.prepare_error = exc
+        if self.prepare_error is not None:
+            raise self.prepare_error
+        return self.http_row, self.metrics
+
     def warn(self, part: str, exc: Exception):
         if self.log is not None:
             self.log.warning("Burn rate context %s unavailable: %s", part, error_name(exc))
 
     def now_text(self) -> str:
         try:
+            http_row, _ = self.lookups()
             self.calls["http_row"] += 1
-            row = self.call(self.http_row)
+            row = self.call(http_row)
             moment = self.now()
             return now_line(http_now(row if isinstance(row, dict) else {}, moment), moment)
         except Exception as exc:  # noqa: BLE001 - context never blocks a notification.
@@ -404,8 +475,9 @@ class Context:
     def window_text(self, state_at: str) -> list[str]:
         try:
             start, end = window(state_at)
+            _, metrics = self.lookups()
             self.calls["metrics"] += 1
-            data = self.metrics(start, end, self.call)
+            data = metrics(start, end, self.call)
             return window_lines(summarize(data["timestamps"], data["values"], start, end,
                                           data["complete"]))
         except Exception as exc:  # noqa: BLE001 - context never blocks a notification.
@@ -416,9 +488,14 @@ class Context:
         return [self.now_text()] + self.window_text(state_at)
 
 
+def prepare_production():
+    """Create (or reuse) both clients on the calling thread; bind them to the lookups."""
+    ddb, cw, name, types = dynamodb(), cloudwatch(), os.environ["TABLE_NAME"], deserializer()
+    return (lambda: fetch_http_row(ddb, name, types),
+            lambda start, end, call: fetch_metric(cw, start, end, call))
+
+
 def production(now, lambda_remaining=None, log=None) -> Context:
-    """The Lambda wiring: bounded low-level clients, fixed query."""
-    return Context(
-        http_row=lambda: fetch_http_row(dynamodb(), os.environ["TABLE_NAME"]),
-        metrics=lambda start, end, call: fetch_metric(cloudwatch(), start, end, call),
-        now=now, lambda_remaining=lambda_remaining, log=log)
+    """The Lambda wiring: bounded low-level clients, fixed query. Creates no client."""
+    return Context(prepare=prepare_production, now=now,
+                   lambda_remaining=lambda_remaining, log=log)
