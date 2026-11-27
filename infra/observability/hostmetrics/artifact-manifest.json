@@ -1,0 +1,17 @@
+{
+  "distribution": "otelcol-contrib",
+  "version": "0.165.0",
+  "os": "linux",
+  "architecture": "arm64",
+  "archive": {
+    "name": "otelcol-contrib_0.165.0_linux_arm64.tar.gz",
+    "sha256": "376420729c862230807bc89811d07d10031eaeca3f6481fe371a2bdcefd2c8fa",
+    "s3_key": "releases/tools/otelcol/0.165.0/otelcol-contrib_0.165.0_linux_arm64.tar.gz",
+    "upstream_digest_verified": true
+  },
+  "binary": {
+    "path": "/opt/gmsv5-hostmetrics/otelcol-contrib",
+    "sha256": "09de3320d28da3e9b80a6d26b1bc864cc2684bf4ac531825ad502c31ede68024"
+  },
+  "verified_date": "2026-11-27"
+}

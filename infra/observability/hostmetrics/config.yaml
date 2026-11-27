@@ -1,0 +1,66 @@
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      load: {}
+      memory: {}
+      filesystem: {}
+      disk: {}
+      network: {}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 80
+    spike_limit_mib: 16
+
+  resource:
+    attributes:
+      - key: service.name
+        value: gmsv5-hostmetrics
+        action: upsert
+      - key: service.namespace
+        value: gms
+        action: upsert
+      - key: service.instance.id
+        value: i-0decf6bc205e273d9
+        action: upsert
+
+  attributes:
+    actions:
+      - key: gms.host.role
+        value: application
+        action: upsert
+
+  batch:
+    timeout: 5s
+
+exporters:
+  otlphttp:
+    endpoint: "${env:GMS_OTLP_ENDPOINT}"
+    headers:
+      x-otlp-token: "${env:GMS_OTLP_TOKEN}"
+    tls:
+      ca_file: /etc/gmsv5-hostmetrics/ca.pem
+    compression: none
+    timeout: 10s
+    sending_queue:
+      enabled: true
+      num_consumers: 1
+      queue_size: 20
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 120s
+
+service:
+  telemetry:
+    metrics:
+      level: none
+      readers: []
+
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, resource, attributes, batch]
+      exporters: [otlphttp]

@@ -1,0 +1,996 @@
+{
+  "description": "Layer 3 - External Availability. CloudWatch HTTPUp one-minute observations. Availability SLO: 99%, weekly error budget: 100.8 minutes. Missing observations are unknown, not successful.",
+  "id": 1229483451637760,
+  "panels": [
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Successful observed minutes / observed minutes. Missing observations are excluded. Target: 99%.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 4,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "100 * $B / $C",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Availability SLO \u2014 Actual (7d)",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Allowed minus observed failed minutes. Upper bound when monitoring coverage is incomplete.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1e-06
+              },
+              {
+                "color": "green",
+                "value": 20.16
+              }
+            ]
+          },
+          "unit": "suffix: min"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 7,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "100.8 - ($C - $B)",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Weekly Error Budget \u2014 Remaining",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Consumed error budget / allowed error budget. 100% means exhausted.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 8,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "100 * ($C - $B) / 100.8",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Weekly Error Budget \u2014 Consumed (%)",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Observed one-minute buckets / 10080 expected buckets. Missing observations are unknown, not successful.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 99
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 9,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "100 * $C / 10080",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Monitoring Coverage (7d)",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "UP"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 6
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Average",
+          "type": "timeSeriesQuery"
+        }
+      ],
+      "title": "Public HTTP Status (last observed sample)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Allowed unavailable minutes in a seven-day window.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "suffix: min"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 6
+      },
+      "id": 5,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "100.8 + 0 * $C",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Weekly Error Budget \u2014 Allowed",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "description": "Observed failed one-minute buckets. Missing observations are not counted as failures.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80.64
+              },
+              {
+                "color": "red",
+                "value": 100.8
+              }
+            ]
+          },
+          "unit": "suffix: min"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "id": 6,
+      "maxDataPoints": 12000,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "hide": false,
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Minimum",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "sum",
+          "refId": "B",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "hide": false,
+          "reducer": "count",
+          "refId": "C",
+          "settings": {
+            "mode": "dropNN"
+          },
+          "type": "reduce"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "$C - $B",
+          "hide": false,
+          "refId": "D",
+          "type": "math"
+        }
+      ],
+      "timeFrom": "10079m",
+      "timeShift": "3m/m",
+      "title": "Weekly Error Budget \u2014 Consumed",
+      "transformations": [
+        {
+          "id": "filterByRefId",
+          "options": {
+            "include": "D"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "description": "1=HTTP 200, 0=check failed. Missing samples are not proof of availability.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "spanNulls": false
+          },
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "sunlightjetrans.com"
+          },
+          "label": "Public HTTP",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "HTTPUp",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Average",
+          "type": "timeSeriesQuery"
+        }
+      ],
+      "title": "Public HTTP Availability \u2014 1-minute samples",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "gms-cloudwatch"
+      },
+      "description": "No data until a real EC2 incident is recorded. App recovery requires HTTP 200; Observability recovery currently means EC2 running only.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "i-0decf6bc205e273d9"
+          },
+          "label": "Application",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "StopToRecoverySeconds",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "A",
+          "region": "ap-northeast-1",
+          "statistic": "Average",
+          "type": "timeSeriesQuery"
+        },
+        {
+          "datasource": {
+            "type": "cloudwatch",
+            "uid": "gms-cloudwatch"
+          },
+          "dimensions": {
+            "Target": "i-021170e56849c597b"
+          },
+          "label": "Observability EC2",
+          "matchExact": true,
+          "metricEditorMode": 0,
+          "metricName": "StopToRecoverySeconds",
+          "metricQueryType": 0,
+          "namespace": "GMS/Availability",
+          "period": "60",
+          "queryMode": "Metrics",
+          "refId": "B",
+          "region": "ap-northeast-1",
+          "statistic": "Average",
+          "type": "timeSeriesQuery"
+        }
+      ],
+      "title": "EC2 Stop-to-Recovery (event-time seconds)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "tags": [
+    "gmsv5",
+    "availability",
+    "sre"
+  ],
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "GMS v5 | External Availability",
+  "uid": "gmsv5-external-availability",
+  "version": 4
+}

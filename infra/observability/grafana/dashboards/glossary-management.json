@@ -1,0 +1,357 @@
+{
+  "description": "Layer 1 - Critical User Journey: Glossary Management. Selected-range HTTP and SQLite diagnostics. No formal SLO or alerting threshold has been defined.",
+  "editable": true,
+  "id": 538348638654464,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Estimated request count from Prometheus increase(). Initial observations and counter resets may affect accuracy.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\"}[$__range]))",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Request Volume",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "HTTP 2xx response ratio, not a formal reliability SLI. No traffic must not be interpreted as 100% success.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "100 * (sum(increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\",http_response_status_code=~\"2..\"}[$__range])) or (0 * sum(increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\"}[$__range])))) / (sum(increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\"}[$__range])) > 0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP Success Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (http_route,http_request_method) (increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\"}[$__range]))",
+          "instant": true,
+          "legendFormat": "{{http_request_method}} {{http_route}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Requests by Operation",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "orientation": "horizontal",
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (http_response_status_code) (increase(http_server_request_duration_seconds_count{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\"}[$__range]))",
+          "instant": true,
+          "legendFormat": "HTTP {{http_response_status_code}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP Status Distribution",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Histogram-based P95 of successful HTTP requests.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 5,
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1000 * histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\",http_request_method=~\"GET\",http_response_status_code=~\"2..\"}[$__range])))",
+          "instant": true,
+          "legendFormat": "Read P95",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1000 * histogram_quantile(0.95, sum by (le) (increase(http_server_request_duration_seconds_bucket{job=\"otel-application-metrics\",http_route=~\"/api/glossaries(/.*)?|/api/import\",http_request_method=~\"POST|PUT|PATCH|DELETE\",http_response_status_code=~\"2..\"}[$__range])))",
+          "instant": true,
+          "legendFormat": "Write P95",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "Read / Write Latency (P95)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Diagnostic metric for glossary-related SQLite tables. Includes database operations from translation workflows and is not exclusive to the Glossary Management CUJ.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "N/A",
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 6,
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1000 * histogram_quantile(0.95, sum by (le,db_collection_name,db_operation_name) (increase(db_client_operation_duration_seconds_bucket{job=\"otel-application-metrics\",db_system_name=\"sqlite\",db_collection_name=~\"glossaries|terms|glossary_term_revisions\",error_type=\"\"}[$__range])))",
+          "instant": true,
+          "legendFormat": "{{db_collection_name}} / {{db_operation_name}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "SQLite Operation Latency (P95)",
+      "type": "bargauge"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "gmsv5",
+    "cuj",
+    "glossary",
+    "observability"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "GMS v5 | Glossary Management",
+  "uid": "gmsv5-glossary-management",
+  "version": 1
+}

@@ -1,0 +1,840 @@
+{
+  "description": "Layer 2 - Infrastructure Vitals: Application EC2. OpenTelemetry Host Metrics pushed over OTLP/HTTPS. Diagnostic dashboard for incident investigation and capacity engineering.",
+  "editable": true,
+  "id": 549215518281728,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Non-idle CPU time ratio, including I/O wait and steal. Calculated using a two-minute rate.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(100 * sum(rate(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",state!=\"idle\"}[2m])) / sum(rate(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[2m]))) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "CPU Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "OTel-reported used memory. Not a direct measurement of Linux MemAvailable.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_memory_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",state=\"used\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Used",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Filesystem usage at /, excluding reserved bytes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(100 * sum(system_filesystem_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",mountpoint=\"/\",state=\"used\"}) / sum(system_filesystem_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",mountpoint=\"/\",state=~\"used|free\"})) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Root EBS Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Filesystem usage at /mnt/gms-data.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(100 * sum(system_filesystem_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",mountpoint=\"/mnt/gms-data\",state=\"used\"}) / sum(system_filesystem_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",mountpoint=\"/mnt/gms-data\",state=~\"used|free\"})) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Data EBS Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Checks whether any host CPU time counter changed during the last three minutes. This is an activity heuristic, not proof of application availability or direct agent health.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "orange",
+                  "text": "NO ACTIVITY OBSERVED"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "ACTIVE"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "max": 1,
+          "min": 0,
+          "noValue": "N/A",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > bool 0) or vector(0))",
+          "instant": true,
+          "legendFormat": "",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Host Telemetry Activity",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Non-idle CPU time ratio. Two-minute rate.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(100 * sum(rate(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",state!=\"idle\"}[2m])) / sum(rate(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[2m]))) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "CPU Usage",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "CPU Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Linux load averages, with logical CPU count for reference.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_cpu_load_average_1m{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "1m",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_cpu_load_average_5m{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "5m",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_cpu_load_average_15m{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "15m",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_cpu_logical_count{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "Logical CPU Count",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Load Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Individual OTel memory states. Not stacked because Linux memory accounting may overlap.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(system_memory_usage_bytes{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",state=~\"used|free|cached\"}) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "{{state}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Approximate device busy-time ratio. Not the percentage of provisioned EBS IOPS or throughput.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "max": 100,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(100 * rate(system_disk_io_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",device=~\"nvme0n1|nvme1n1\"}[2m])) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "{{device}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Disk I/O Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Whole NVMe devices only. Partitions excluded to avoid double counting.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(rate(system_disk_io_bytes_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",device=~\"nvme0n1|nvme1n1\"}[2m])) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "{{device}} / {{direction}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Disk Read / Write Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Read and write operations per second.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(rate(system_disk_operations_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",device=~\"nvme0n1|nvme1n1\"}[2m])) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "{{device}} / {{direction}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Disk Read / Write IOPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Primary network interface ens5. Loopback excluded.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "noValue": "N/A",
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(rate(system_network_io_bytes_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\",device=\"ens5\"}[2m])) and on() (sum(changes(system_cpu_time_seconds_total{gms_host_role=\"application\",exported_instance=\"i-0decf6bc205e273d9\"}[3m])) > 0)",
+          "instant": false,
+          "legendFormat": "{{device}} / {{direction}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Network Receive / Transmit",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "gmsv5",
+    "infrastructure",
+    "application",
+    "observability"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "GMS v5 | Application Infrastructure",
+  "uid": "gmsv5-application-infrastructure",
+  "version": 1
+}

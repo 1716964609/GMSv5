@@ -1,0 +1,29 @@
+[Unit]
+Description=GMS v5 Application Host Metrics Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gms-hostmetrics
+Group=gms-hostmetrics
+
+EnvironmentFile=/etc/gmsv5-hostmetrics/agent.env
+Environment=GOMEMLIMIT=96MiB
+
+ExecStart=/opt/gmsv5-hostmetrics/otelcol-contrib --config=/etc/gmsv5-hostmetrics/config.yaml
+
+Restart=on-failure
+RestartSec=10s
+
+MemoryHigh=128M
+MemoryMax=192M
+CPUQuota=25%
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
