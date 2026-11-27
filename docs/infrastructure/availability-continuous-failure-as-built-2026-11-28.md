@@ -4,7 +4,7 @@
 - **Owner:** Infrastructure / SRE
 - **Scope:** `infra/terraform/availability/`. One CloudWatch alarm, one EventBridge rule, the existing Lambda, table and Discord egress. No new Lambda, SNS topic, table, EC2 or IAM permission.
 - **Current status:**
-  - **Applied in stage `off` (§8).** Both alarms evaluate; both rules are
+  - **Applied in stage `off` (§8), and the DATA INSUFFICIENT text change applied the same way (§9).** Both alarms evaluate; both rules are
     `DISABLED` and both delivery variables `disabled`, so nothing is
     sent.
   - CloudWatch evaluation measured in an isolated test.
@@ -319,8 +319,27 @@ Requested by the Product Owner on 2026-11-28 after the §8 apply.
 - **Tests (local test):** 284 in total, all passing: the 283 earlier
   tests plus one for the exact new text, which also checks the 9-of-60
   text is unchanged. Mutation runs: all 61 detected (51 context, profile and shadow, 10 state).
-- **Expected plan:** 0 to add, 1 to change, 0 to destroy, with only the
-  Lambda `source_code_hash` changed.
+- **Plan (from `968a1a7`):** 0 to add, 1 to change, 0 to destroy. Only
+  the Lambda `source_code_hash` changed (`last_modified` is computed by
+  AWS). All 13 environment variables were identical.
+
+**Apply (stage `off`, approved by the Product Owner).** The plan was
+applied at 04:10:19–04:10:26 JST: 0 added, 1 changed, 0 destroyed.
+Production configuration was captured before and after it.
+
+| Check | Result |
+|---|---|
+| Lambda | `CodeSha256` `rwQ4…` → `NRgrC1cjzpkmtEH1c+YCZ4kkwn6JWLoSoi1m4PlDJuc=` (= artifact; the 5 files equal `968a1a7`); `Successful` / `Active`. Only `CodeSha256` and `LastModified` changed |
+| Environment | 13 variables identical by value; both deliveries `disabled` |
+| Alarms | Both configurations identical. Burn rate `OK` since 2026-11-27 21:42 JST; continuous failure `OK` since 03:29:41 JST |
+| Rules, targets, permissions | Identical. Both alarm rules `DISABLED`; HTTP probe rule `ENABLED` |
+| IAM | Inline policy, policy names and attached policies identical |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 04:08–04:15 JST (8 minutes across the apply) |
+| Lambda metrics (04:11–04:16 JST) | 5 invocations, 0 errors, 0 throttles |
+| Lambda log | 22 lines: 0 error or warning lines, 0 alarm-notification lines. Max memory 95 MB of 128. Max duration 3.5 s. One cold start, init 325 ms |
+| DynamoDB | HTTP row `up`, 0 failures, last slot 04:16 JST; no `burnrate#` or `contfail#` row |
+| Readiness | HTTP 200 in 0.23 s, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
 
 
 ## 10. Verification status
@@ -352,4 +371,5 @@ log, run log, alarm configuration and history, captured events and the
 test script are kept outside the repository with SHA-256 checksums,
 because they contain ARNs with the account ID. The same applies to the
 before and after snapshots of the 2026-11-28 apply, its apply log
-(account ID masked), post-apply check output and scripts.
+(account ID masked), post-apply check output and scripts, and to those of
+the §9 apply.
