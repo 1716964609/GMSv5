@@ -1,12 +1,12 @@
 # GMS v5 — Availability Burn Rate Alarm As-Built (2026-11-27)
 
-- **Evidence date:** 2026-11-27 JST (applied 21:41:50–21:42:05 JST = 12:41:50–12:42:05Z). §6 was added on 2026-11-28.
+- **Evidence date:** 2026-11-27 JST (applied 21:41:50–21:42:05 JST = 12:41:50–12:42:05Z). §6 and §7 were added on 2026-11-28 (redesign applied 01:37:36–01:37:45 JST = 2026-11-27 16:37:36–16:37:45Z).
 - **Owner:** Infrastructure / SRE
 - **Scope:** `infra/terraform/availability/`, the existing EventBridge → Lambda → DynamoDB → Discord availability monitoring. No new Lambda, SNS topic, table or EC2.
 - **Current status:**
   - **Applied in stage `off`.** The alarm evaluates. The rule is `DISABLED` and nothing is sent.
   - **CloudWatch evaluation measured** in an isolated test.
-  - **Message redesign (§6) committed locally, NOT applied.**
+  - **Message redesign (§6) applied in stage `off` on 2026-11-28 01:37 JST (§7).** Its code path has not run in production yet: nothing invokes it while the rule is `DISABLED`.
   - **`shadow` and `live` not started.**
 - **Design and operation:** [Availability Runbook §13](./availability-external-runbook.md#13-availability-burn-rate-alarm-p2)
 - **Earlier record:** [Spot Reason Tracking As-Built 2026-11-25](./spot-reason-tracking-as-built-2026-11-25.md)
@@ -140,7 +140,7 @@ Integration test results, applied to Runbook §13.1 and §13.2:
 The backtest result (4 episodes, 197 active minutes) stands for its
 complete evidence. It cannot predict the gap cases above.
 
-## 6. Message redesign (2026-11-28, local, not applied)
+## 6. Message redesign (2026-11-28)
 
 **Decision (Product Owner, 2026-11-28).** Messages support the first
 response to an incident. They no longer report a burn rate: no
@@ -300,22 +300,65 @@ unavailable (TimeoutError)` and `Last 60 completed min: unavailable
   added. The other 5 statements are unchanged.
 - Alarm, burn rate rule (`DISABLED`), target, permission and HTTP probe
   rule: no-op.
-- Not applied.
+- That plan was not applied. The fixes below changed the code, and the
+  plan applied in §7 was made from commit `d69cb6f`.
 
-## 7. Verification status
+## 7. Redesign apply (stage `off`, 2026-11-28)
+
+Approved by the Product Owner on 2026-11-28. Production configuration,
+inspected by the Operator.
+
+**Before apply.**
+
+- HEAD `d69cb6f` and a clean working tree.
+- SSO role `AdministratorAccess` (profile `gms-admin`), `ap-northeast-1`,
+  workspace `default`.
+- The saved plan was identical to a fresh plan against the current state:
+  0 to add, 2 to change, 0 to destroy.
+- Artifact SHA-256 `ziomjW9ojuoJo1UltpkkhqqIwLGB+SZ0zHfC/v1yw5k=`; its 5
+  files are byte-identical to the commit.
+
+**Apply.** The saved plan was applied at 01:37:36–01:37:45 JST: 0 added,
+2 changed, 0 destroyed.
+
+- `aws_iam_role_policy.lambda_runtime` took 2 s.
+- `aws_lambda_function.availability` took 6 s.
+
+**After apply.** Production configuration was captured immediately before
+and after the apply and compared:
+
+| Check | Result |
+|---|---|
+| Lambda | `CodeSha256` `pAnD…` → `ziomjW9ojuoJo1UltpkkhqqIwLGB+SZ0zHfC/v1yw5k=` (= artifact); `Successful` / `Active`. Only `CodeSha256` and `LastModified` changed; runtime, 90 s timeout, 128 MB, role and handler unchanged |
+| IAM | One statement added, `ReadBurnRateContextMetric` (`cloudwatch:GetMetricData`, `*`, `aws:RequestedRegion = ap-northeast-1`). None removed; the other 5 identical |
+| Environment | All 10 variables identical by value (compared as hashes); `BURN_RATE_DELIVERY=disabled` |
+| Alarm | Configuration identical (9 of 60, `Minimum`, 60 s, `< 1`, `missing`, no actions, no unit); state `OK` since 2026-11-27 21:42 JST |
+| EventBridge | Burn rate rule `DISABLED`; HTTP probe rule `ENABLED`, `rate(1 minute)`; the 5 Lambda permissions identical |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 01:36–01:43 JST (8 minutes across the apply) |
+| Lambda metrics (01:38–01:44 JST) | 5 invocations, 0 errors, 0 throttles |
+| Lambda log | 22 lines: 0 error or warning lines, 0 burn rate lines (expected in `off`). Max memory 95 MB of 128 (as before). Max duration 3.5 s. One cold start, init 327 ms |
+| DynamoDB | HTTP row `up`, 0 failures, last slot 01:43 JST; no `burnrate#` row |
+| Readiness | HTTP 200 in 0.30 s, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+The burn rate implementation for 9 of 60 is closed with this apply. The
+remaining steps are operational: `shadow`, then `live`, each with its own
+approval (Runbook §13.5).
+
+## 8. Verification status
 
 | Item | Status |
 |---|---|
 | Stage `off` apply and checks | Done (§2, §3) |
 | CloudWatch 9-of-60 evaluation incl. gaps | Measured (§4, §5) |
 | State, ordering, lease and message logic | Local test |
-| Message redesign | Local test and plan only. Not applied |
+| Message redesign | Applied in `off` (§7). Not yet run in production |
 | Shadow lifecycle (all four kinds, separate ledger) | Local test |
 | Production context (HTTP row, `HTTPUp`, IAM) | Pending: `shadow`, at the next alarm transition |
 | EventBridge → Lambda delivery of a real alarm event | Pending: `shadow` |
 | Discord delivery of a burn rate message | Pending: `live` |
 
-## 8. Residual risks
+## 9. Residual risks
 
 - **Shared fate:** one function both publishes `HTTPUp` and sends these
   messages. There is no meta-alarm.
@@ -342,18 +385,19 @@ unavailable (TimeoutError)` and `Last 60 completed min: unavailable
   counted against the 30 s budget but is not interruptible once started.
   It is estimated, not bounded.
 
-## 9. Rollback
+## 10. Rollback
 
 Runbook §13.8. In short:
 
 - **Stage `off`:** messages are already stopped.
-- **Message redesign:** revert its three commits (`a70f1b3`, `c209503`
-  and the pre-apply fix). The plan has 2 changes: the Lambda code goes back to `d81c157`,
-  and the IAM statement is removed.
-- **Whole feature:** revert both commits. The 4 resources are
-  destroyed and the Lambda returns to the 2026-11-25 build.
+- **Message redesign:** revert `a70f1b3`, `c209503` and `d69cb6f`. The
+  plan has 2 changes: the Lambda code goes back to the `d81c157` build
+  (`CodeSha256` `pAnD…`), and the IAM statement is removed.
+- **Whole feature:** revert all four burn rate commits. The 4 resources
+  are destroyed, the IAM statement is removed and the Lambda returns to
+  the 2026-11-25 build.
 
-## 10. Evidence handling
+## 11. Evidence handling
 
 This document records resource names, configuration values, code hashes,
 measured times and summarized results. It contains no AWS account ID,
@@ -365,6 +409,9 @@ with the account ID:
 
 - the integration test data, events, alarm history, run log and script,
   with SHA-256 checksums;
-- the rollback package.
+- the rollback package;
+- the before and after snapshots of the 2026-11-28 apply, its apply log
+  (account ID masked), its post-apply check output and script, with
+  SHA-256 checksums.
 
 Plan files and State stay local and are not in Git.

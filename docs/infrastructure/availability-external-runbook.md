@@ -42,10 +42,9 @@
 > integration test the same day
 > ([As-Built](./availability-burn-rate-as-built-2026-11-27.md)). The
 > 2026-11-28 message redesign (§13.4, §13.11: current HTTP state and the
-> last 60 minutes instead of an observed burn rate) is committed and tested
-> locally (257 tests in total) but **not applied**. Its shadow ledger,
-> hard lookup deadline and lookup thread limit were added on 2026-11-28
-> after review.
+> last 60 minutes instead of an observed burn rate, 257 tests in total)
+> was **applied in stage `off` on 2026-11-28 at 01:37 JST**, with its
+> shadow ledger, hard lookup deadline and lookup thread limit.
 
 ## 1. Architecture
 
@@ -705,10 +704,11 @@ evidence.
   ([As-Built §3](./availability-burn-rate-as-built-2026-11-27.md#3-checks-after-apply)).
 - **CloudWatch evaluation measured** in an isolated integration test
   (§13.6). The results changed §13.1 and §13.2.
-- **Message redesign (2026-11-28), not applied:** messages no longer
-  show an observed burn rate. They show the current HTTP state and a
-  count of the last 60 minutes (§13.4, §13.11). This adds
-  `cloudwatch:GetMetricData` to the Lambda role.
+- **Message redesign applied in stage `off` (2026-11-28 01:37 JST):**
+  messages no longer show an observed burn rate. They show the current
+  HTTP state and a count of the last 60 minutes (§13.4, §13.11). The
+  Lambda role has `cloudwatch:GetMetricData`. Checks after apply passed
+  ([As-Built §7](./availability-burn-rate-as-built-2026-11-27.md#7-redesign-apply-stage-off-2026-11-28)).
 - **Not done:** `shadow`, `live`, and delivery through EventBridge to the
   Lambda.
 
@@ -881,7 +881,7 @@ is not when the site recovered. DATA RESTORED says it does not confirm
 the site is up. INSUFFICIENT_DATA says it is a monitoring data problem,
 not downtime or recovery. If a lookup fails, its line says
 `unavailable (<code>)` or `Now: UNKNOWN — …` and the message is still
-sent. Samples: [As-Built §6](./availability-burn-rate-as-built-2026-11-27.md#6-message-redesign-2026-11-28-local-not-applied).
+sent. Samples: [As-Built §6](./availability-burn-rate-as-built-2026-11-27.md#6-message-redesign-2026-11-28).
 
 **Residual cases (at-least-once, not exactly-once):**
 
