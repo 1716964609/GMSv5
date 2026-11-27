@@ -6,8 +6,12 @@ changes, never per minute. Responder context (current HTTP state and the last
 60 minutes of HTTPUp) is read by burn_rate_context only when a message is
 about to be sent or, in shadow mode, logged.
 
-One state row per alarm, separate from EC2, HTTP, deployment and Spot rows:
-  instance_id = "burnrate#<alarm name>", event_time = "~STATE"
+Two alarms use this module, each described by a Profile (message text and
+row prefix): the 9-of-60 burn rate alarm and the 6-of-6 continuous failure
+alarm. One state row per alarm, separate from EC2, HTTP, deployment and Spot
+rows and from each other:
+  instance_id = "burnrate#<alarm name>" or "contfail#<alarm name>",
+  event_time = "~STATE"
 
 Events update the row only when newer (detail.state.timestamp), so duplicate
 and out-of-order deliveries never overwrite a newer state. Every invocation
@@ -30,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from botocore.exceptions import ClientError
@@ -48,6 +53,9 @@ STATE_KEY = "~STATE"
 TARGET = "sunlightjetrans.com"
 EVALUATION_PERIODS = 60
 DATAPOINTS_TO_ALARM = 9
+# Continuous failure alarm (continuous_failure.tf).
+CONTINUOUS_EVALUATION_PERIODS = 6
+CONTINUOUS_DATAPOINTS_TO_ALARM = 6
 JST = timezone(timedelta(hours=9), "JST")
 
 # No invocation outlives the 90 s Lambda timeout, so an older lease is dead.
@@ -136,11 +144,11 @@ def owed(item: dict, ledger: str = LIVE_LEDGER) -> str | None:
     return None
 
 
-HEADERS = {
-    "alarm": "HIGH — Availability Burn Rate: ALARM",
-    "normalized": "HIGH — Availability Burn Rate: NORMALIZED (alarm back to OK)",
-    "insufficient": "WARN — Availability Burn Rate: DATA INSUFFICIENT",
-    "data_restored": "INFO — Availability Burn Rate: DATA RESTORED",
+KINDS = {
+    "alarm": ("HIGH", "ALARM"),
+    "normalized": ("HIGH", "NORMALIZED (alarm back to OK)"),
+    "insufficient": ("WARN", "DATA INSUFFICIENT"),
+    "data_restored": ("INFO", "DATA RESTORED"),
 }
 MEANING = {
     "alarm": "Many recent HTTP checks failed. Check the HTTP DOWN/RECOVERED and "
@@ -160,6 +168,54 @@ FOOTNOTE = ("Now = latest HTTP check when this message was generated. Last 60 = 
 NO_CONTEXT = ["Now: UNKNOWN — HTTP state not read",
               "Last 60 completed min: unavailable (not read)"]
 
+CONTINUOUS_MEANING = {
+    # treat_missing_data = "missing" (continuous_failure.tf): OK needs a real
+    # passed check; a stopped probe leads to INSUFFICIENT_DATA, never to OK.
+    "alarm": "The 6 most recent HTTP checks all failed: an ongoing outage signal. A missing "
+             "minute between failures does not break the run. Check the HTTP DOWN/RECOVERED "
+             "and EC2/Spot notifications.",
+    "normalized": "The CloudWatch alarm returned to OK: a passed check is among the 6 most "
+                  "recent datapoints. This is NOT the confirmed recovery time and does not "
+                  "confirm the site is up now; see Now and the HTTP DOWN/RECOVERED "
+                  "notifications.",
+    "insufficient": "CloudWatch has had no HTTPUp datapoints for about 12 minutes. This is a "
+                    "monitoring data problem, not proof of downtime or recovery. Check the "
+                    "scheduled HTTP probe (Lambda gmsv5-availability).",
+    "data_restored": MEANING["data_restored"],
+}
+CONTINUOUS_FOOTNOTE = ("Now = latest HTTP check when this message was generated. Last 60 = "
+                       "the 60 completed minutes before the alarm transition, counted "
+                       "independently of CloudWatch's evaluation.")
+
+
+@dataclass(frozen=True)
+class Profile:
+    """What differs between the monitored alarms. State handling is shared."""
+
+    key: str
+    title: str
+    threshold: str
+    row_prefix: str
+    meaning: dict = field(repr=False)
+    footnote: str = FOOTNOTE
+
+    def header(self, kind: str) -> str:
+        severity, label = KINDS[kind]
+        return f"{severity} — {self.title}: {label}"
+
+
+BURN_RATE = Profile(
+    key="burn_rate", title="Availability Burn Rate",
+    threshold=f"Alarm threshold: {DATAPOINTS_TO_ALARM}/{EVALUATION_PERIODS} failed datapoints",
+    row_prefix="burnrate#", meaning=MEANING)
+CONTINUOUS_FAILURE = Profile(
+    key="continuous_failure", title="Availability Continuous Failure",
+    threshold=(f"Alarm threshold: {CONTINUOUS_DATAPOINTS_TO_ALARM}/"
+               f"{CONTINUOUS_EVALUATION_PERIODS} failed datapoints in a row "
+               "(the most recent ones; missing minutes are skipped)"),
+    row_prefix="contfail#", meaning=CONTINUOUS_MEANING, footnote=CONTINUOUS_FOOTNOTE)
+HEADERS = {kind: BURN_RATE.header(kind) for kind in KINDS}
+
 
 def context_lines(context, item: dict) -> list[str]:
     """Responder context. Never raises: a failure only drops the lines."""
@@ -177,16 +233,17 @@ def transition_time(state_at: str) -> str:
     return f"{moment.astimezone(JST):%H:%M:%S} JST ({state_at} UTC, alarm state timestamp)"
 
 
-def message(kind: str, item: dict, alarm_name: str, context: list[str] | None = None) -> str:
+def message(kind: str, item: dict, alarm_name: str, context: list[str] | None = None,
+            profile: Profile = BURN_RATE) -> str:
     lines = [
-        HEADERS[kind],
-        f"Alarm threshold: {DATAPOINTS_TO_ALARM}/{EVALUATION_PERIODS} failed datapoints",
+        profile.header(kind),
+        profile.threshold,
         *(context if context is not None else NO_CONTEXT),
         f"Alarm: {item.get('previous_state', 'UNKNOWN')} -> {item['alarm_state']} "
         f"at {transition_time(item['state_at'])}",
         f"Target: {TARGET} (external HTTP probe, HTTPUp); alarm {alarm_name}",
-        MEANING[kind],
-        FOOTNOTE,
+        profile.meaning[kind],
+        profile.footnote,
     ]
     return "\n".join(lines)
 
@@ -195,8 +252,8 @@ def is_conditional(exc: ClientError) -> bool:
     return exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
 
 
-def row_key(alarm_name: str) -> dict:
-    return {"instance_id": "burnrate#" + alarm_name, "event_time": STATE_KEY}
+def row_key(alarm_name: str, profile: Profile = BURN_RATE) -> dict:
+    return {"instance_id": profile.row_prefix + alarm_name, "event_time": STATE_KEY}
 
 
 def accept(table, key: dict, change: dict, observed_at: str) -> str:
@@ -292,7 +349,7 @@ def shadow_mark(table, key: dict, at: str, state: str) -> bool:
 
 
 def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str,
-              context=None):
+              context=None, profile: Profile = BURN_RATE):
     """Send (live) or log (shadow) what the current state is owed.
 
     Live and shadow keep separate ledgers (notified_* and shadow_notified_*),
@@ -318,40 +375,47 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
             # Mark first: a redelivered or concurrent event then logs nothing.
             if not shadow_mark(table, key, at, item["alarm_state"]):
                 continue  # State or shadow ledger changed. Re-read and decide again.
-            text = message(kind, item, alarm_name, context_lines(context, item))
+            text = message(kind, item, alarm_name, context_lines(context, item), profile)
             LOG.info(json.dumps({"burn_rate": "shadow", "delivered": False, "would_send": kind,
-                                 "state_at": at, "message": text}, ensure_ascii=False))
+                                 "state_at": at, "alarm": profile.key, "message": text},
+                                ensure_ascii=False))
             sent.append("shadow:" + kind)
             continue
         if not claim(table, key, at, now):
             continue  # State, delivery or lease changed. Re-read and decide again.
         try:
-            notify(message(kind, item, alarm_name, context_lines(context, item)))
+            notify(message(kind, item, alarm_name, context_lines(context, item), profile))
         except Exception:
             release(table, key, at)
             LOG.error(json.dumps({"burn_rate": "notify_failed", "kind": kind, "state_at": at}))
             raise
         mark(table, key, at, item["alarm_state"])
-        LOG.info(json.dumps({"burn_rate": "notified", "kind": kind, "state_at": at}))
+        LOG.info(json.dumps({"burn_rate": "notified", "kind": kind, "state_at": at,
+                             "alarm": profile.key}))
         sent.append(kind)
     return sent
 
 
 def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
-           delivery: str, context=None):
-    """context: burn_rate_context.Context (or None: messages say "not read")."""
+           delivery: str, context=None, profile: Profile = BURN_RATE):
+    """context: burn_rate_context.Context (or None: messages say "not read").
+
+    profile selects the message text and the state row; the name and ARN
+    checks, ordering, lease and ledgers are the same for every alarm.
+    """
     change = parse(event, alarm_name=alarm_name, alarm_arn=alarm_arn)
     if isinstance(change, str):
         return {"ignored": change}
-    key = row_key(alarm_name)
+    key = row_key(alarm_name, profile)
     moment = now()
     outcome = accept(table, key, change, moment.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if outcome == "not_newer":
         stored = current(table, key).get("state_at", "")
         outcome = "duplicate" if stored == change["state_at"] else "stale"
     LOG.info(json.dumps({"burn_rate": outcome, "alarm_state": change["alarm_state"],
-                         "state_at": change["state_at"]}))
+                         "state_at": change["state_at"], "alarm": profile.key}))
     # Duplicates and stale events still reconcile: a retry may complete a failed send.
     sent = reconcile(table, key, notify=notify, now=int(moment.timestamp()),
-                     deliver=delivery == "enabled", alarm_name=alarm_name, context=context)
+                     deliver=delivery == "enabled", alarm_name=alarm_name, context=context,
+                     profile=profile)
     return {"burn_rate": outcome, "alarm_state": change["alarm_state"], "sent": sent}

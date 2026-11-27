@@ -1210,3 +1210,199 @@ so the role can read any CloudWatch metric in Tokyo. The code reads one.
 `Now: UNKNOWN — HTTP state unavailable (<code>)`, with the AWS error
 code or exception class only, never AWS's message text. The message is
 sent anyway. The log line is `Burn rate context <part> unavailable: <code>`.
+
+## 14. Continuous failure alarm (6 of 6)
+
+**Status (2026-11-28): implemented and tested locally; CloudWatch's
+evaluation measured in an isolated integration test. Not applied.** The
+missing-data choice (§14.2) awaits the Product Owner's final decision.
+Record applies in a dated As-Built
+([Continuous Failure As-Built](./availability-continuous-failure-as-built-2026-11-28.md)).
+
+### 14.1 What it detects
+
+| Signal | Detects | Priority |
+|---|---|---|
+| HTTP DOWN / RECOVERED (§2) | 2 consecutive failed checks, and the first passed one | Existing |
+| Continuous failure `gmsv5-availability-continuous-failure` (this section) | The 6 most recent one-minute checks all failed: a long outage, early | HIGH |
+| Burn rate `gmsv5-availability-burn-rate-fast` (§13) | 9 of the last 60 checks failed: accumulated interruptions | HIGH |
+| UptimeRobot (§9) | Independent of AWS | Low |
+
+Backtest (evidence `cloudwatch-2026-11-27`,
+`continuous-failure-backtest-v1.json`, strict wall-clock model): of 34
+failure episodes, 4 lasted 6 minutes or more.
+
+- 1 occurred while the burn rate alarm was already active.
+- 1 was detected 3 minutes before the burn rate alarm.
+- 2 were never alarmed by the burn rate alarm during the episode.
+- The 30 shorter episodes are not alarmed.
+
+Replaying the same evidence through the sliding-window model of §14.2
+gives the same 4 episodes: no missing minute is next to a failure in that
+evidence. Both alarms notify independently. There is no suppression and
+no composite alarm.
+
+### 14.2 Missing data: integration test and choice
+
+Isolated test on 2026-11-28 (namespace
+`GMSv5/ContinuousFailureIntegrationTest`, 44 temporary alarms, about
+55 minutes):
+
+- **Variants compared on the same data:**
+  - sliding window with `notBreaching`;
+  - sliding window with `missing`;
+  - metric math `FILL(m1, 1)`;
+  - wall clock window with `notBreaching`.
+- **Continuous delay:** every datapoint of a case was published 70, 130 or
+  250 s after its minute began, not only one late datapoint.
+- **Evidence:** outside the repository
+  ([As-Built §3](./availability-continuous-failure-as-built-2026-11-28.md#3-isolated-cloudwatch-integration-test)).
+
+| Case | sliding `notBreaching` | sliding `missing` | `FILL(m1, 1)` | wall clock |
+|---|---|---|---|---|
+| 5 consecutive failures; spread failures | OK | OK | OK | OK |
+| 6, 8 and 14 consecutive failures | ALARM | ALARM | ALARM | ALARM |
+| `FFF-FFF` (one missing minute) | **ALARM** | **ALARM** | OK | OK |
+| Continuous delay 70 s | ALARM | ALARM | ALARM | ALARM |
+| Continuous delay 130 s and 250 s | ALARM (about 3 and 5 min) | ALARM (about 3 and 4.5 min) | **never** | **never** |
+| Probe stops during ALARM | OK after about 6 min ("treated as NonBreaching") | **INSUFFICIENT_DATA after about 12 min** | OK after about 2 min | OK after about 2 min |
+| No data at all | OK | INSUFFICIENT_DATA | OK | OK |
+
+Times are minutes after the end of the last datapoint. Common to all
+variants:
+
+- ALARM came 1.1–2.0 minutes after the sixth failed minute began.
+- OK came 1.1–2.0 minutes after the last failed minute ended.
+- No variant flapped. The 14-minute and delayed runs stayed in ALARM
+  until real recovery.
+- 95 events matched 95 history items, with no duplicates.
+
+**Choice: sliding window with `treat_missing_data = "missing"`.**
+
+- `FILL(m1, 1)` and the wall clock window are strict about missing
+  minutes, but they **never alarmed** when data arrived 130 s or more
+  late: the newest minute was always filled or missing. Rejected, as
+  the AWS documentation on metric math warns.
+- With the sliding window, CloudWatch evaluates the **6 most recent real
+  datapoints** in an evaluation range of about 12 periods. A missing
+  minute between failures does not break the run (`FFF-FFF` alarmed),
+  so this is not strictly 6 wall-clock minutes. The range is estimated
+  from the `stop` case, the same N + 6 pattern as §13.2. It is not
+  documented by AWS.
+- `missing` (not `notBreaching`): leaving ALARM needs a **real passed
+  check** among the 6 most recent datapoints, so a stopped probe never
+  produces NORMALIZED. It goes to INSUFFICIENT_DATA after about 12
+  minutes, which also flags a stopped probe much earlier than §13
+  (about 66 minutes). With `notBreaching`, the same stop produced OK,
+  stated as "missing datapoint was treated as [NonBreaching]".
+
+### 14.3 Configuration and path
+
+- **Alarm:** `gmsv5-availability-continuous-failure`, `GMS/Availability`
+  `HTTPUp` `Target=sunlightjetrans.com`, `Minimum`, 60 s, 6 of 6, `< 1`,
+  `missing`. Sliding window (default), no unit, no actions.
+- **Rule:** `gmsv5-availability-continuous-failure`, matching this alarm's
+  ARN and name only, with Lambda permission
+  `AllowContinuousFailureAlarmEvents`.
+- **Lambda:** the existing function. `handler.py` picks the alarm's
+  profile by `detail.alarmName`. `burn_rate.py` then applies the same
+  name and ARN check, ordering, lease, live and shadow ledgers and
+  context lookups as §13.4 and §13.11.
+- **State row:** `contfail#gmsv5-availability-continuous-failure` /
+  `~STATE`, separate from `burnrate#…`. An event whose name and ARN
+  belong to different alarms is rejected.
+- **Environment:** `CONTINUOUS_FAILURE_ALARM_NAME`,
+  `CONTINUOUS_FAILURE_ALARM_ARN`, `CONTINUOUS_FAILURE_DELIVERY`. The name
+  and ARN are built from the region, the caller account and the alarm
+  name, so a plan shows the existing variables unchanged.
+- **IAM:** no change; the role already has GetItem and GetMetricData.
+
+### 14.4 Messages
+
+Headers: `HIGH — Availability Continuous Failure: ALARM`,
+`… NORMALIZED (alarm back to OK)`, `WARN … DATA INSUFFICIENT`,
+`INFO … DATA RESTORED`. Line 2 is `Alarm threshold: 6/6 failed datapoints
+in a row (the most recent ones; missing minutes are skipped)`. `Now`,
+`Last 60` and `Pattern` are as in §13.11.
+
+- **ALARM** says that the 6 most recent checks all failed and that a
+  missing minute does not break the run.
+- **NORMALIZED** says that a passed check is among the 6 most recent
+  datapoints, that this is not the confirmed recovery time and does not
+  confirm the site is up.
+- **DATA INSUFFICIENT** says that there was no HTTPUp for about 12
+  minutes, and that this is a monitoring data problem, not downtime or
+  recovery.
+
+Samples:
+[As-Built §5](./availability-continuous-failure-as-built-2026-11-28.md#5-message-samples-local-test).
+A 17-minute outage gives, in order:
+
+1. HTTP DOWN.
+2. Continuous ALARM (about 6–7 minutes after the outage starts).
+3. Burn rate ALARM (about 9–10 minutes).
+4. HTTP RECOVERED.
+5. Continuous NORMALIZED (1–2 minutes after recovery).
+6. Burn rate NORMALIZED (about 52 minutes later).
+
+### 14.5 Rollout gate
+
+The variable `continuous_failure_alarm_rollout` (`off` default,
+`shadow`, `live`) sets this alarm's rule state and
+`CONTINUOUS_FAILURE_DELIVERY` exactly as §13.5 does for the burn rate
+alarm. The two variables are independent. The shadow behavior and the
+alarm state check around `live` are the same as in §13.5, with this
+alarm's name.
+
+**First apply (stage `off`).** Expected plan: 4 to add, 1 to change,
+0 to destroy:
+
+- added: `aws_cloudwatch_metric_alarm.continuous_failure`,
+  `aws_cloudwatch_event_rule.continuous_failure` (`DISABLED`),
+  `aws_cloudwatch_event_target.continuous_failure` and
+  `aws_lambda_permission.continuous_failure`;
+- changed: `aws_lambda_function.availability`, with new code and 3 new
+  variables. The existing 10 variables are unchanged.
+
+IAM, the table, the burn rate alarm and rule, and the HTTP probe rule
+must be no-op.
+
+### 14.6 Checks after apply (read only)
+
+The same as §13.7, for this alarm and rule:
+
+- Configuration as in §14.3; rule `DISABLED`; `CONTINUOUS_FAILURE_DELIVERY=disabled`.
+- The alarm `OK` once evaluated.
+- The burn rate alarm, its rule and its 10 variables unchanged.
+- HTTP probe and `HTTPUp` continuing, no Lambda errors.
+
+### 14.7 Rollback
+
+- Stop messages: set the variable to `off` and apply.
+- Remove: revert the commit and apply. Expected plan: the 4 resources
+  destroyed, and the Lambda back to the previous build with 10
+  variables. Leave the `contfail#` row; the previous code never reads it.
+
+### 14.8 Cost
+
+| Item | Incremental cost |
+|---|---|
+| One standard-resolution metric alarm | USD 0.10 per month at list price, or within the free tier of 10 alarm metrics (2 alarms in this module). Confirm on the CloudWatch pricing page |
+| Lambda, DynamoDB, GetMetricData, Logs | A few calls per state change; negligible |
+| Integration test (2026-11-28) | Below USD 0.05, once (limit USD 1) |
+
+### 14.9 Limitations
+
+- Not strictly 6 wall-clock minutes. Failures within about 12 minutes on
+  both sides of a missing minute can alarm (§14.2). The strict variants
+  could not detect continuously late data.
+- The about-12-minute range is an estimate from one test.
+- Late data delays ALARM by about the delay (3–5 minutes at 130–250 s).
+- A stopped probe gives DATA INSUFFICIENT, from this alarm after about 12
+  minutes and from §13 after about 66 minutes. A broken function sends
+  nothing: shared fate as in §13.3. There is no meta-alarm.
+- NORMALIZED needs only one passed check. A flapping site can give
+  several ALARM and NORMALIZED pairs. This was not seen in the
+  evidence, where failures were contiguous.
+- Delivery is at least once; no DLQ (§13.4). Worker slots (§13.11) are
+  shared with the burn rate alarm.

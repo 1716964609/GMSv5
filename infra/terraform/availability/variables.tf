@@ -70,3 +70,14 @@ variable "burn_rate_alarm_rollout" {
     error_message = "Use off, shadow or live."
   }
 }
+
+# Rollout gate of the continuous failure alarm (continuous_failure.tf), with
+# the same meaning as burn_rate_alarm_rollout. The two are independent.
+variable "continuous_failure_alarm_rollout" {
+  type    = string
+  default = "off"
+  validation {
+    condition     = contains(["off", "shadow", "live"], var.continuous_failure_alarm_rollout)
+    error_message = "Use off, shadow or live."
+  }
+}

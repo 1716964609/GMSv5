@@ -531,17 +531,31 @@ def handler(event: dict, context=None):
     if event.get("source") == "aws.ec2":
         return handle_ec2(event, context)
     if event.get("source") == "aws.cloudwatch":
-        from burn_rate import handle as handle_burn_rate
+        import burn_rate
 
-        return handle_burn_rate(
+        # (profile, name, ARN, delivery) per monitored alarm. Each has its own
+        # rule, delivery variable and state row. The burn rate alarm is the
+        # fallback, so unmatched events are rejected by its name/ARN check.
+        alarms = [
+            (burn_rate.CONTINUOUS_FAILURE, "CONTINUOUS_FAILURE_ALARM_NAME",
+             "CONTINUOUS_FAILURE_ALARM_ARN", "CONTINUOUS_FAILURE_DELIVERY"),
+            (burn_rate.BURN_RATE, "BURN_RATE_ALARM_NAME", "BURN_RATE_ALARM_ARN",
+             "BURN_RATE_DELIVERY"),
+        ]
+        name = (event.get("detail") or {}).get("alarmName")
+        profile, name_var, arn_var, delivery_var = next(
+            (a for a in alarms if os.environ.get(a[1]) and os.environ.get(a[1]) == name),
+            alarms[-1])
+        return burn_rate.handle(
             event,
             table=table(),
             notify=notify,
             now=now_utc,
-            alarm_name=os.environ.get("BURN_RATE_ALARM_NAME", ""),
-            alarm_arn=os.environ.get("BURN_RATE_ALARM_ARN", ""),
+            alarm_name=os.environ.get(name_var, ""),
+            alarm_arn=os.environ.get(arn_var, ""),
             # Anything other than "enabled" records state without sending (shadow).
-            delivery=os.environ.get("BURN_RATE_DELIVERY", "disabled"),
+            delivery=os.environ.get(delivery_var, "disabled"),
             context=burn_rate_context(context),
+            profile=profile,
         )
     return {"ignored": "unsupported source"}

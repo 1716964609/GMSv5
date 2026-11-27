@@ -169,6 +169,13 @@ resource "aws_lambda_function" "availability" {
       BURN_RATE_ALARM_NAME = aws_cloudwatch_metric_alarm.burn_rate_fast.alarm_name
       BURN_RATE_ALARM_ARN  = aws_cloudwatch_metric_alarm.burn_rate_fast.arn
       BURN_RATE_DELIVERY   = var.burn_rate_alarm_rollout == "live" ? "enabled" : "disabled"
+
+      # Continuous failure alarm notifications (continuous_failure.tf). Name and
+      # ARN are built from known values, so the plan shows the other variables
+      # unchanged; a test checks the ARN format against the alarm.
+      CONTINUOUS_FAILURE_ALARM_NAME = local.continuous_failure_alarm_name
+      CONTINUOUS_FAILURE_ALARM_ARN  = local.continuous_failure_alarm_arn
+      CONTINUOUS_FAILURE_DELIVERY   = var.continuous_failure_alarm_rollout == "live" ? "enabled" : "disabled"
     }
   }
   depends_on = [aws_iam_role_policy.lambda_runtime, aws_cloudwatch_log_group.lambda]
