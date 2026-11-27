@@ -178,9 +178,8 @@ CONTINUOUS_MEANING = {
                   "recent datapoints. This is NOT the confirmed recovery time and does not "
                   "confirm the site is up now; see Now and the HTTP DOWN/RECOVERED "
                   "notifications.",
-    "insufficient": "CloudWatch has had no HTTPUp datapoints for about 12 minutes. This is a "
-                    "monitoring data problem, not proof of downtime or recovery. Check the "
-                    "scheduled HTTP probe (Lambda gmsv5-availability).",
+    "insufficient": "Insufficient HTTPUp data to evaluate the alarm. This is a monitoring "
+                    "data issue, not evidence of an outage or recovery.",
     "data_restored": MEANING["data_restored"],
 }
 CONTINUOUS_FOOTNOTE = ("Now = latest HTTP check when this message was generated. Last 60 = "

@@ -1333,13 +1333,11 @@ in a row (the most recent ones; missing minutes are skipped)`. `Now`,
 - **NORMALIZED** says that a passed check is among the 6 most recent
   datapoints, that this is not the confirmed recovery time and does not
   confirm the site is up.
-- **DATA INSUFFICIENT** says that there was no HTTPUp "for about 12
-  minutes", and that this is a monitoring data problem, not downtime or
-  recovery. The figure is the integration test observation, not a
-  measurement of the actual gap. The message does not measure the gap;
-  `Now` (last check time) and `Last 60` (missing count) show the actual
-  data. A later code change should word it as "about 12 minutes in the
-  integration test" or drop the number (not in the applied build).
+- **DATA INSUFFICIENT** says "Insufficient HTTPUp data to evaluate the
+  alarm. This is a monitoring data issue, not evidence of an outage or
+  recovery." It gives no duration. `Now` (last check time) and `Last 60`
+  (missing count) show the actual data. The about-12-minute delay before
+  it (§14.2) is an integration test observation, not a guaranteed time.
 
 Samples:
 [As-Built §5](./availability-continuous-failure-as-built-2026-11-28.md#5-message-samples-local-test).

@@ -157,17 +157,18 @@ had with the options available here.
 `missing`. `FILL`, the wall clock window and `notBreaching` are not
 used. Reliable detection of long outages takes priority over strict
 6 wall-clock minutes. Evaluation across a missing minute is accepted as
-known behavior, and the residual risks in §10 are accepted.
+known behavior, and the residual risks in §11 are accepted.
 
 The "about 12 minutes" before DATA INSUFFICIENT is the integration test
 observation (11.7 minutes), not a guaranteed or production-measured
-time. The applied message text still says "for about 12 minutes" as a
-plain statement. Rewording it needs a code change and a new artifact, so
-it was not done in this apply (Runbook §14.4).
+time. The build applied in §8 still stated "for about 12 minutes" in the
+DATA INSUFFICIENT text. The number was removed from the message on
+2026-11-28 (§9).
 
 ## 5. Message samples (local test)
 
-Rendered offline with stub context; under 1,000 characters each.
+Rendered offline with stub context; under 1,000 characters each. The
+DATA INSUFFICIENT sample shows the text after §9.
 
 ```text
 HIGH — Availability Continuous Failure: ALARM
@@ -200,7 +201,7 @@ Last 60 completed min (11:12 JST–12:12 JST): failed 9 / ok 39 / missing 12
 Pattern: 1 observed episode, longest 9 min; missing minutes split episodes
 Alarm: ALARM -> INSUFFICIENT_DATA at 12:12:20 JST (2026-11-20T03:12:20.000Z UTC, alarm state timestamp)
 …
-CloudWatch has had no HTTPUp datapoints for about 12 minutes. This is a monitoring data problem, not proof of downtime or recovery. Check the scheduled HTTP probe (Lambda gmsv5-availability).
+Insufficient HTTPUp data to evaluate the alarm. This is a monitoring data issue, not evidence of an outage or recovery.
 ```
 
 ## 6. Implementation (local test)
@@ -303,7 +304,26 @@ The check output's HTTPUp heading still says "since 16:36Z", left over
 from the previous script. The queried range was 18:27Z onward, as its
 timestamps show.
 
-## 9. Verification status
+## 9. DATA INSUFFICIENT text change (2026-11-28)
+
+Requested by the Product Owner on 2026-11-28 after the §8 apply.
+
+| | Text |
+|---|---|
+| Before (applied in §8) | "CloudWatch has had no HTTPUp datapoints for about 12 minutes. This is a monitoring data problem, not proof of downtime or recovery. Check the scheduled HTTP probe (Lambda gmsv5-availability)." |
+| After | "Insufficient HTTPUp data to evaluate the alarm. This is a monitoring data issue, not evidence of an outage or recovery." |
+
+- Only the 6-of-6 DATA INSUFFICIENT text changed (`CONTINUOUS_MEANING`
+  in `lambda/burn_rate.py`). The 9-of-60 texts, alarm settings, state
+  handling, IAM and notification logic are unchanged.
+- **Tests (local test):** 284 in total, all passing: the 283 earlier
+  tests plus one for the exact new text, which also checks the 9-of-60
+  text is unchanged. Mutation runs: all 61 detected (51 context, profile and shadow, 10 state).
+- **Expected plan:** 0 to add, 1 to change, 0 to destroy, with only the
+  Lambda `source_code_hash` changed.
+
+
+## 10. Verification status
 
 | Item | Status |
 |---|---|
@@ -314,7 +334,7 @@ timestamps show.
 | Production configuration | Applied in `off` and checked (§8) |
 | Delivery of a real event to the Lambda, Discord delivery | Pending: `shadow`, `live` |
 
-## 10. Residual risks
+## 11. Residual risks
 
 - Not strictly 6 wall-clock minutes (§4).
 - The about-12-minute evaluation range is an estimate from one test.
@@ -324,7 +344,7 @@ timestamps show.
 - Shared fate with the probe, at-least-once delivery, no DLQ, and worker
   slots shared with the burn rate alarm (Runbook §13.3, §13.4, §13.11).
 
-## 11. Evidence handling
+## 12. Evidence handling
 
 This document contains no AWS account ID, credential, session token,
 Terraform State or Discord token. The integration test data, publish

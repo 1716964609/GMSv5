@@ -103,6 +103,16 @@ class ProfileTests(unittest.TestCase):
             self.assertNotIn("recovered", text)
             self.assertNotIn("normalized", text)
 
+    def test_insufficient_text_is_exact_and_has_no_duration(self):
+        text = br.message("insufficient", dict(self.ITEM, alarm_state="INSUFFICIENT_DATA"), CF_NAME,
+                          None, br.CONTINUOUS_FAILURE)
+        self.assertIn("\nInsufficient HTTPUp data to evaluate the alarm. This is a monitoring data "
+                      "issue, not evidence of an outage or recovery.\n", text)
+        self.assertNotRegex(text, r"\d+ minutes")
+        # The 9-of-60 text is unchanged.
+        self.assertIn("CloudWatch has too few HTTPUp datapoints to evaluate the alarm.",
+                      br.message("insufficient", dict(self.ITEM, alarm_state="INSUFFICIENT_DATA"), NAME))
+
     def test_rows_are_separate(self):
         self.assertEqual(br.row_key(CF_NAME, br.CONTINUOUS_FAILURE)["instance_id"],
                          "contfail#" + CF_NAME)
