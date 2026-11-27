@@ -91,6 +91,20 @@ data "aws_iam_policy_document" "lambda_runtime" {
       values   = ["GMS/Availability"]
     }
   }
+  # Burn rate notifications read the last 60 minutes of HTTPUp (read only).
+  # GetMetricData has no resource ARN for classic metrics (only the optional
+  # "dataset" type) and cloudwatch:namespace does not apply to it, so the
+  # Resource must be "*"; the metric is fixed in burn_rate_context.py.
+  statement {
+    sid       = "ReadBurnRateContextMetric"
+    actions   = ["cloudwatch:GetMetricData"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+  }
   # Only the one manually created SecureString is readable.
   statement {
     sid     = "ReadRelaySecret"

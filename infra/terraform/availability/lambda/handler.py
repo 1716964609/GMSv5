@@ -485,8 +485,25 @@ def track_http_status(event: dict, is_up: bool) -> dict:
     return {"transition": "down", "failures": failures}
 
 
+def burn_rate_context(context=None):
+    """Bounded, read-only responder context for burn rate messages."""
+    import burn_rate_context as brc
+
+    remaining = None
+    if context is not None and hasattr(context, "get_remaining_time_in_millis"):
+        remaining = lambda: context.get_remaining_time_in_millis() / 1000  # noqa: E731
+    return brc.production(now_utc, lambda_remaining=remaining, log=LOG)
+
+
 def handler(event: dict, context=None):
     cfg = configuration()
+    # Operator preview of burn rate message text: read only, never sent.
+    if (event.get("source") == "gmsv5.manual-test" and event.get("test_mode") is True
+            and event.get("burn_rate_preview") is True):
+        from burn_rate import preview
+
+        return preview(context=burn_rate_context(context), now=now_utc,
+                       alarm_name=os.environ.get("BURN_RATE_ALARM_NAME", ""))
     # Synthetic smoke test never pretends a real EC2 was stopped.
     if event.get("source") == "gmsv5.manual-test" and event.get("test_mode") is True:
         at = timestamp(now_utc())
@@ -532,5 +549,6 @@ def handler(event: dict, context=None):
             alarm_arn=os.environ.get("BURN_RATE_ALARM_ARN", ""),
             # Anything other than "enabled" records state without sending (shadow).
             delivery=os.environ.get("BURN_RATE_DELIVERY", "disabled"),
+            context=burn_rate_context(context),
         )
     return {"ignored": "unsupported source"}

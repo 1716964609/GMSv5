@@ -1,8 +1,10 @@
 """Availability burn rate alarm notifications (CloudWatch Alarm State Change).
 
 CloudWatch evaluates the alarm natively; this module only turns its state
-changes into Discord messages. It never reads metrics and writes DynamoDB
-only on alarm state changes, never per minute.
+changes into Discord messages. It writes DynamoDB only on alarm state
+changes, never per minute. Responder context (current HTTP state and the last
+60 minutes of HTTPUp) is read by burn_rate_context only when a message is
+about to be sent or, in shadow mode, logged.
 
 One state row per alarm, separate from EC2, HTTP, deployment and Spot rows:
   instance_id = "burnrate#<alarm name>", event_time = "~STATE"
@@ -23,9 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from botocore.exceptions import ClientError
 
@@ -38,14 +39,12 @@ STATES = {"ALARM", "OK", "INSUFFICIENT_DATA"}
 STATE_KEY = "~STATE"
 
 # Descriptive values for messages. They must match burn_rate.tf; a test
-# compares them. The alarm itself is configured only in Terraform.
+# compares them. The alarm itself is configured only in Terraform. The 14.4x
+# design rationale for 9/60 is in the Availability Runbook §13.1, not here.
 TARGET = "sunlightjetrans.com"
-SLO = 0.99
-SLO_WINDOW = "rolling 7 days"
-ERROR_BUDGET_MINUTES = 100.8
 EVALUATION_PERIODS = 60
 DATAPOINTS_TO_ALARM = 9
-DESIGN_BURN_RATE = 14.4
+JST = timezone(timedelta(hours=9), "JST")
 
 # No invocation outlives the 90 s Lambda timeout, so an older lease is dead.
 LEASE_SECONDS = 90
@@ -78,22 +77,6 @@ def state_time(value) -> str | None:
     return f"{moment:%Y-%m-%dT%H:%M:%S}.{moment.microsecond // 1000:03d}Z"
 
 
-def observed(state: dict) -> dict:
-    """Failed samples as listed in reasonData. Never inferred from the threshold."""
-    try:
-        data = json.loads(state.get("reasonData") or "")
-        values = data["recentDatapoints"]
-        threshold = data["threshold"]
-        if (not isinstance(values, list) or not values
-                or isinstance(threshold, bool) or not isinstance(threshold, (int, float))
-                or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                           and math.isfinite(v) for v in values)):
-            return {}
-    except (TypeError, ValueError, KeyError):
-        return {}
-    return {"listed": len(values), "failed": sum(1 for v in values if v < threshold)}
-
-
 def parse(event: dict, *, alarm_name: str, alarm_arn: str):
     """Return the accepted state change, or a reason string for ignoring it."""
     if event.get("source") != SOURCE or event.get("detail-type") != DETAIL_TYPE:
@@ -120,7 +103,6 @@ def parse(event: dict, *, alarm_name: str, alarm_arn: str):
         # CloudWatch uses "Unchecked: ..." for state set without an evaluation.
         "reason_kind": "unchecked" if reason.startswith("Unchecked") else "evaluated",
     }
-    change.update({f"observed_{k}": v for k, v in observed(state).items()})
     return change
 
 
@@ -142,55 +124,57 @@ def owed(item: dict) -> str | None:
     return None
 
 
-def observation_line(item: dict) -> str:
-    listed, failed = item.get("observed_listed"), item.get("observed_failed")
-    if listed is None or failed is None:
-        return "Observed: not reported in the alarm event"
-    listed, failed = int(listed), int(failed)
-    if listed == EVALUATION_PERIODS:
-        rate = failed / EVALUATION_PERIODS / (1 - SLO)
-        return (f"Observed: {failed} of {listed} one-minute samples failed "
-                f"= {rate:.1f}x burn rate (alarm reasonData)")
-    return (f"Observed: {failed} of {listed} datapoints listed in the alarm event were "
-            f"below the threshold; not a full {EVALUATION_PERIODS}-sample window, "
-            f"so no burn rate is computed")
+HEADERS = {
+    "alarm": "HIGH — Availability Burn Rate: ALARM",
+    "normalized": "HIGH — Availability Burn Rate: NORMALIZED (alarm back to OK)",
+    "insufficient": "WARN — Availability Burn Rate: DATA INSUFFICIENT",
+    "data_restored": "INFO — Availability Burn Rate: DATA RESTORED",
+}
+MEANING = {
+    "alarm": "Many recent HTTP checks failed. Check the HTTP DOWN/RECOVERED and "
+             "EC2/Spot notifications.",
+    "normalized": "The CloudWatch alarm returned to OK: its 9-of-60 condition is no longer "
+                  "met. This is NOT when the site recovered and does not confirm it is up "
+                  "now; see Now and the HTTP DOWN/RECOVERED notifications.",
+    "insufficient": "CloudWatch has too few HTTPUp datapoints to evaluate the alarm. This is "
+                    "a monitoring data problem, not proof of downtime or recovery. Check the "
+                    "scheduled HTTP probe (Lambda gmsv5-availability).",
+    "data_restored": "The alarm has datapoints again and its condition is not met. This "
+                     "does NOT confirm that the site is up now; see Now.",
+}
+FOOTNOTE = ("Now = latest HTTP check when this message was generated. Last 60 = the 60 "
+            "completed minutes before the alarm transition, counted independently of "
+            "CloudWatch's own evaluation (which can look further back).")
+NO_CONTEXT = ["Now: UNKNOWN — HTTP state not read",
+              "Last 60 completed min: unavailable (not read)"]
 
 
-def message(kind: str, item: dict, alarm_name: str) -> str:
-    full = DATAPOINTS_TO_ALARM / EVALUATION_PERIODS / (1 - SLO)
-    condition = (f"Condition (configured): at least {DATAPOINTS_TO_ALARM} of the last "
-                 f"{EVALUATION_PERIODS} one-minute HTTPUp samples failed "
-                 f"(= {full:.1f}x burn rate on a full window; design threshold "
-                 f"{DESIGN_BURN_RATE}x)")
-    header = {
-        "alarm": "[HIGH] AVAILABILITY BURN RATE ALARM",
-        "normalized": "[HIGH] BURN RATE NORMALIZED",
-        "insufficient": "[WARN] BURN RATE DATA INSUFFICIENT",
-        "data_restored": "[INFO] BURN RATE DATA RESTORED",
-    }[kind]
-    meaning = {
-        "alarm": "The error budget is being consumed fast. Check HTTP status and EC2 "
-                 "or Spot notifications.",
-        "normalized": "The alarm condition is no longer met. This does NOT confirm that "
-                      "the site is up now; HTTP DOWN/RECOVERED notifications show "
-                      "the current state.",
-        "insufficient": "The alarm has no HTTPUp datapoints to evaluate. This is a "
-                        "monitoring data problem, not proof of downtime or recovery. "
-                        "Check the scheduled HTTP probe (Lambda gmsv5-availability).",
-        "data_restored": "The alarm has datapoints again and its condition is not met. "
-                         "This does NOT confirm that the site is up now.",
-    }[kind]
+def context_lines(context, item: dict) -> list[str]:
+    """Responder context. Never raises: a failure only drops the lines."""
+    if context is None:
+        return list(NO_CONTEXT)
+    try:
+        return list(context.lines(item["state_at"]))
+    except Exception as exc:  # noqa: BLE001 - the notification must still go out.
+        LOG.warning("Burn rate context failed: %s", type(exc).__name__)
+        return list(NO_CONTEXT)
+
+
+def transition_time(state_at: str) -> str:
+    moment = datetime.fromisoformat(state_at.replace("Z", "+00:00"))
+    return f"{moment.astimezone(JST):%H:%M:%S} JST ({state_at} UTC, alarm state timestamp)"
+
+
+def message(kind: str, item: dict, alarm_name: str, context: list[str] | None = None) -> str:
     lines = [
-        header,
-        f"Target: {TARGET} (external HTTP probe, metric HTTPUp)",
-        f"SLO: {SLO:.0%} availability, {SLO_WINDOW} "
-        f"(error budget {ERROR_BUDGET_MINUTES} min)",
-        condition,
-        observation_line(item),
-        f"Transition: {item.get('previous_state', 'UNKNOWN')} -> {item['alarm_state']} "
-        f"at {item['state_at']} (alarm state timestamp, UTC)",
-        f"Alarm: {alarm_name}",
-        meaning,
+        HEADERS[kind],
+        f"Alarm threshold: {DATAPOINTS_TO_ALARM}/{EVALUATION_PERIODS} failed datapoints",
+        *(context if context is not None else NO_CONTEXT),
+        f"Alarm: {item.get('previous_state', 'UNKNOWN')} -> {item['alarm_state']} "
+        f"at {transition_time(item['state_at'])}",
+        f"Target: {TARGET} (external HTTP probe, HTTPUp); alarm {alarm_name}",
+        MEANING[kind],
+        FOOTNOTE,
     ]
     return "\n".join(lines)
 
@@ -206,17 +190,12 @@ def row_key(alarm_name: str) -> dict:
 def accept(table, key: dict, change: dict, observed_at: str) -> str:
     """Store the change if it is newer than the stored state. Returns the outcome."""
     fields = dict(change, updated_at=observed_at)
-    removable = [k for k in ("observed_listed", "observed_failed") if k not in fields]
-    names = {f"#{k}": k for k in list(fields) + removable}
-    expression = "SET " + ", ".join(f"#{k} = :{k}" for k in fields)
-    if removable:
-        expression += " REMOVE " + ", ".join(f"#{k}" for k in removable)
     try:
         table.update_item(
             Key=key,
-            UpdateExpression=expression,
+            UpdateExpression="SET " + ", ".join(f"#{k} = :{k}" for k in fields),
             ConditionExpression="attribute_not_exists(#state_at) OR #state_at < :state_at",
-            ExpressionAttributeNames=names,
+            ExpressionAttributeNames={f"#{k}": k for k in fields},
             ExpressionAttributeValues={f":{k}": v for k, v in fields.items()},
         )
         return "accepted"
@@ -277,8 +256,14 @@ def mark(table, key: dict, at: str, state: str):
     )
 
 
-def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str):
-    """Send what the current state is owed. Loops when the state moved during a send."""
+def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str,
+              context=None, fresh: bool = True):
+    """Send what the current state is owed. Loops when the state moved during a send.
+
+    Context (extra API calls) is read only for a message that is actually sent
+    after a successful claim, or logged in shadow mode for a newly accepted
+    state. Duplicates, stale events, held leases and nothing-owed exit first.
+    """
     sent = []
     for _ in range(MAX_RECONCILE_ROUNDS):
         item = current(table, key)
@@ -293,13 +278,19 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
             break
         at = item["state_at"]
         if not deliver:
-            LOG.info(json.dumps({"burn_rate": "shadow", "would_send": kind, "state_at": at}))
+            if not fresh:
+                # Shadow never marks delivery, so a redelivered event would log again.
+                LOG.info(json.dumps({"burn_rate": "shadow_repeat_skipped", "state_at": at}))
+                break
+            text = message(kind, item, alarm_name, context_lines(context, item))
+            LOG.info(json.dumps({"burn_rate": "shadow", "would_send": kind, "state_at": at,
+                                 "message": text}, ensure_ascii=False))
             sent.append("shadow:" + kind)
             break
         if not claim(table, key, at, now):
             continue  # State, delivery or lease changed. Re-read and decide again.
         try:
-            notify(message(kind, item, alarm_name))
+            notify(message(kind, item, alarm_name, context_lines(context, item)))
         except Exception:
             release(table, key, at)
             LOG.error(json.dumps({"burn_rate": "notify_failed", "kind": kind, "state_at": at}))
@@ -311,7 +302,8 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
 
 
 def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
-           delivery: str):
+           delivery: str, context=None):
+    """context: burn_rate_context.Context (or None: messages say "not read")."""
     change = parse(event, alarm_name=alarm_name, alarm_arn=alarm_arn)
     if isinstance(change, str):
         return {"ignored": change}
@@ -325,5 +317,29 @@ def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
                          "state_at": change["state_at"]}))
     # Duplicates and stale events still reconcile: a retry may complete a failed send.
     sent = reconcile(table, key, notify=notify, now=int(moment.timestamp()),
-                     deliver=delivery == "enabled", alarm_name=alarm_name)
+                     deliver=delivery == "enabled", alarm_name=alarm_name,
+                     context=context, fresh=outcome == "accepted")
     return {"burn_rate": outcome, "alarm_state": change["alarm_state"], "sent": sent}
+
+
+PREVIEW = {"alarm": ("OK", "ALARM"), "normalized": ("ALARM", "OK"),
+           "insufficient": ("OK", "INSUFFICIENT_DATA"),
+           "data_restored": ("INSUFFICIENT_DATA", "OK")}
+
+
+def preview(*, context, now, alarm_name: str) -> dict:
+    """Operator check of the message text with live context. Read only.
+
+    Renders all four messages as if the alarm had changed state now. It never
+    sends, never writes DynamoDB and never touches the alarm. Context is read
+    once and shared by the four texts.
+    """
+    moment = now().astimezone(timezone.utc)
+    at = f"{moment:%Y-%m-%dT%H:%M:%S}.{moment.microsecond // 1000:03d}Z"
+    lines = context_lines(context, {"state_at": at})
+    texts = {}
+    for kind, (previous, state) in PREVIEW.items():
+        item = {"alarm_state": state, "previous_state": previous, "state_at": at}
+        texts[kind] = "PREVIEW (not sent)\n" + message(kind, item, alarm_name, lines)
+    LOG.info(json.dumps({"burn_rate": "preview", "messages": texts}, ensure_ascii=False))
+    return {"preview": texts}

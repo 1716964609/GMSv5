@@ -93,7 +93,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(change["alarm_state"], "ALARM")
         self.assertEqual(change["state_at"], "2026-11-24T00:06:40.989Z")
         self.assertEqual(change["previous_state"], "OK")
-        self.assertEqual((change["observed_failed"], change["observed_listed"]), (9, 60))
+        self.assertFalse([k for k in change if k.startswith("observed")])
 
     def test_rejects_other_sources_types_names_and_arns(self):
         event = alarm_event("ALARM", T1)
@@ -138,70 +138,84 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(br.parse(event, alarm_name=NAME, alarm_arn=ARN)["reason_kind"], "unchecked")
 
 
-class ObservedTests(unittest.TestCase):
-    def test_counts_values_below_threshold(self):
-        self.assertEqual(br.observed({"reasonData": reason_data(9)}), {"listed": 60, "failed": 9})
-        self.assertEqual(br.observed({"reasonData": reason_data(0, 57)}), {"listed": 57, "failed": 0})
+class ReasonDataTests(unittest.TestCase):
+    """reasonData.recentDatapoints is not the evaluation window (Runbook §13.6), so it is ignored."""
 
-    def test_invalid_or_missing_data_is_not_reported(self):
-        bad = [None, "", "{", json.dumps({"threshold": 1.0}),
-               json.dumps({"recentDatapoints": [], "threshold": 1.0}),
-               json.dumps({"recentDatapoints": [0, "1"], "threshold": 1.0}),
-               json.dumps({"recentDatapoints": [0, True], "threshold": 1.0}),
-               json.dumps({"recentDatapoints": [0, 1], "threshold": "1"}),
-               json.dumps({"recentDatapoints": "0,1", "threshold": 1.0}),
-               '{"recentDatapoints": [0, NaN], "threshold": 1.0}']
-        for data in bad:
-            self.assertEqual(br.observed({"reasonData": data}), {}, data)
+    def test_reason_data_is_neither_stored_nor_quoted(self):
+        h = Harness()
+        h.run(alarm_event("ALARM", T1, failed=9))
+        h.run(alarm_event("OK", T2, previous="ALARM", failed=8))
+        self.assertFalse([k for k in h.row() if k.startswith("observed")])
+        for text in h.sent:
+            self.assertNotIn("Observed", text)
+            self.assertNotRegex(text, r"\d+(\.\d+)?x\b")  # no burn rate multiple
+            self.assertNotIn("SLO", text)
+            self.assertNotIn("budget", text.lower())
+
+    def test_malformed_reason_data_is_harmless(self):
+        for data in (None, "", "{", '{"recentDatapoints": [0, NaN]}', "[]"):
+            h = Harness()
+            self.assertEqual(h.run(alarm_event("ALARM", T1, data=data))["sent"], ["alarm"], data)
 
 
 class MessageTests(unittest.TestCase):
-    def item(self, state="ALARM", failed=9, listed=60, previous="OK"):
-        item = {"alarm_state": state, "state_at": "2026-11-24T00:06:40.989Z",
+    CONTEXT = ["Now: DOWN — 4 min (since first failed check 21:10 JST); 5 consecutive failed checks",
+               "Last 60 completed min (20:12 JST–21:12 JST): failed 9 / ok 51 / missing 0",
+               "Pattern: 3 observed episodes, longest 5 min"]
+
+    def item(self, state="ALARM", previous="OK"):
+        return {"alarm_state": state, "state_at": "2026-11-24T00:06:40.989Z",
                 "previous_state": previous}
-        if failed is not None:
-            item.update(observed_failed=failed, observed_listed=listed)
-        return item
 
     def test_alarm_message_contents(self):
-        text = br.message("alarm", self.item(), NAME)
-        self.assertTrue(text.startswith("[HIGH] AVAILABILITY BURN RATE ALARM\n"))
-        for part in ("sunlightjetrans.com", "SLO: 99% availability, rolling 7 days",
-                     "at least 9 of the last 60 one-minute HTTPUp samples failed",
-                     "design threshold 14.4x", "Observed: 9 of 60 one-minute samples failed "
-                     "= 15.0x burn rate", "OK -> ALARM at 2026-11-24T00:06:40.989Z", NAME):
+        text = br.message("alarm", self.item(), NAME, self.CONTEXT)
+        lines = text.split("\n")
+        self.assertEqual(lines[0], "HIGH — Availability Burn Rate: ALARM")
+        self.assertEqual(lines[1], "Alarm threshold: 9/60 failed datapoints")
+        self.assertEqual(lines[2:5], self.CONTEXT)
+        for part in ("sunlightjetrans.com", NAME, "OK -> ALARM at 09:06:40 JST",
+                     "2026-11-24T00:06:40.989Z UTC, alarm state timestamp",
+                     "Now = latest HTTP check when this message was generated"):
             self.assertIn(part, text)
+        self.assertNotIn("14.4", text)
         self.assertLessEqual(len(text), 1800)
 
-    def test_no_measured_rate_without_parsed_values(self):
-        text = br.message("alarm", self.item(failed=None), NAME)
-        self.assertIn("Observed: not reported in the alarm event", text)
-        # 15.0x appears only once: in the configured condition, labeled as such.
-        self.assertEqual(text.count("15.0x"), 1)
-        self.assertIn("Condition (configured)", text)
+    def test_without_context_says_not_read(self):
+        text = br.message("alarm", self.item(), NAME)
+        self.assertIn("Now: UNKNOWN — HTTP state not read", text)
+        self.assertIn("Last 60 completed min: unavailable (not read)", text)
+        self.assertNotIn("Now: UP", text)
 
-    def test_partial_window_has_no_rate(self):
-        text = br.message("alarm", self.item(failed=9, listed=58), NAME)
-        self.assertIn("9 of 58 datapoints listed", text)
-        self.assertIn("no burn rate is computed", text)
-        self.assertNotIn("15.5x", text)
+    def test_context_failure_keeps_the_message(self):
+        class Broken:
+            def lines(self, state_at):
+                raise RuntimeError("boom")
+        lines = br.context_lines(Broken(), self.item())
+        self.assertEqual(lines, br.NO_CONTEXT)
 
     def test_normalized_does_not_claim_recovery(self):
-        text = br.message("normalized", self.item("OK", 8, previous="ALARM"), NAME)
-        self.assertTrue(text.startswith("[HIGH] BURN RATE NORMALIZED\n"))
+        text = br.message("normalized", self.item("OK", previous="ALARM"), NAME, self.CONTEXT)
+        self.assertTrue(text.startswith("HIGH — Availability Burn Rate: NORMALIZED (alarm back to OK)\n"))
         self.assertIn("ALARM -> OK", text)
-        self.assertIn("13.3x", text)
-        self.assertIn("does NOT confirm that the site is up", text)
+        self.assertIn("CloudWatch alarm returned to OK", text)
+        self.assertIn("NOT when the site recovered", text)
+        self.assertIn("does not confirm it is up now", text)
         self.assertNotIn("RECOVERED", text.replace("HTTP DOWN/RECOVERED", ""))
 
     def test_insufficient_is_not_health_or_recovery(self):
         for kind in ("insufficient", "data_restored"):
             text = br.message(kind, self.item("INSUFFICIENT_DATA" if kind == "insufficient"
-                                              else "OK", None), NAME).lower()
+                                              else "OK"), NAME).lower()
             self.assertNotIn("healthy", text)
             self.assertNotIn("recovered", text)
-        text = br.message("insufficient", self.item("INSUFFICIENT_DATA", None), NAME)
+            self.assertNotIn("normalized", text)
+        text = br.message("insufficient", self.item("INSUFFICIENT_DATA"), NAME)
+        self.assertTrue(text.startswith("WARN — Availability Burn Rate: DATA INSUFFICIENT\n"))
         self.assertIn("not proof of downtime or recovery", text)
+
+    def test_headers_differ_per_kind(self):
+        headers = {br.message(k, self.item(), NAME).split("\n")[0] for k in br.HEADERS}
+        self.assertEqual(len(headers), 4)
 
 
 class OwedTests(unittest.TestCase):
@@ -238,7 +252,7 @@ class FlowTests(unittest.TestCase):
         result = self.h.run(alarm_event("OK", T2, previous="ALARM", failed=8))
         self.assertEqual(result["sent"], ["normalized"])
         self.assertEqual(len(self.h.sent), 2)
-        self.assertIn("[HIGH] BURN RATE NORMALIZED", self.h.sent[1])
+        self.assertIn("HIGH — Availability Burn Rate: NORMALIZED", self.h.sent[1])
         row = self.h.row()
         self.assertEqual((row["notified_state"], row["notified_at"]), ("OK", br.state_time(T2)))
         self.assertNotIn("lease_until", row)
@@ -284,10 +298,10 @@ class FlowTests(unittest.TestCase):
     def test_data_gap_and_restore(self):
         self.h.run(alarm_event("OK", T1, previous="INSUFFICIENT_DATA", failed=0))
         self.assertEqual(self.h.run(alarm_event("INSUFFICIENT_DATA", T2))["sent"], ["insufficient"])
-        self.assertIn("[WARN] BURN RATE DATA INSUFFICIENT", self.h.sent[0])
+        self.assertIn("WARN — Availability Burn Rate: DATA INSUFFICIENT", self.h.sent[0])
         self.assertEqual(self.h.run(alarm_event("OK", T3, previous="INSUFFICIENT_DATA",
                                                 failed=0))["sent"], ["data_restored"])
-        self.assertIn("[INFO] BURN RATE DATA RESTORED", self.h.sent[1])
+        self.assertIn("INFO — Availability Burn Rate: DATA RESTORED", self.h.sent[1])
 
     def test_alarm_after_normalized_alarms_again(self):
         self.h.run(alarm_event("ALARM", T1, failed=9))
@@ -295,11 +309,9 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(self.h.run(alarm_event("ALARM", T3, failed=10))["sent"], ["alarm"])
         self.assertEqual(len(self.h.sent), 3)
 
-    def test_observation_is_not_carried_to_next_state(self):
+    def test_alarm_message_has_no_reason_data_numbers(self):
         self.h.run(alarm_event("ALARM", T1, failed=9))
-        self.h.run(alarm_event("OK", T2, previous="ALARM"))  # no reasonData
-        self.assertNotIn("observed_failed", self.h.row())
-        self.assertIn("not reported in the alarm event", self.h.sent[1])
+        self.assertNotIn("Observed", self.h.sent[0])
 
 
 class DeliveryFailureTests(unittest.TestCase):
@@ -468,9 +480,51 @@ class HandlerRoutingTests(unittest.TestCase):
                   patch.object(self.handler, "table", return_value=self.table),
                   patch.object(self.handler, "notify", side_effect=self.sent.append),
                   patch.object(self.handler, "metric", side_effect=AssertionError("metric")),
-                  patch.object(self.handler, "probe_http", side_effect=AssertionError("probe"))):
+                  patch.object(self.handler, "probe_http", side_effect=AssertionError("probe")),
+                  patch.object(self.handler, "burn_rate_context", side_effect=self.fake_context)):
             p.start()
             self.addCleanup(p.stop)
+        self.contexts = []
+
+    def fake_context(self, context=None):
+        handler_self = self
+
+        class Fixed:
+            calls = 0
+
+            def lines(self, state_at):
+                Fixed.calls += 1
+                return ["Now: UP (last check 09:08 JST)", "Last 60 completed min: stub",
+                        "Pattern: stub"]
+        handler_self.contexts.append((context, Fixed))
+        return Fixed()
+
+    def test_context_is_wired_into_the_message(self):
+        self.handler.handler(alarm_event("ALARM", T1, failed=9))
+        self.assertIn("Now: UP (last check 09:08 JST)\nLast 60 completed min: stub", self.sent[0])
+
+    def test_preview_is_read_only(self):
+        result = self.handler.handler({"source": "gmsv5.manual-test", "test_mode": True,
+                                       "burn_rate_preview": True})
+        self.assertEqual(len(result["preview"]), 4)
+        self.assertEqual((self.sent, self.table.items), ([], {}))
+        # Without test_mode it is neither a preview nor the synthetic test.
+        self.assertEqual(self.handler.handler({"source": "gmsv5.manual-test",
+                                               "burn_rate_preview": True}),
+                         {"ignored": "unsupported source"})
+        self.assertEqual(self.sent, [])
+
+    def test_real_context_uses_lambda_time_left(self):
+        class LambdaContext:
+            def get_remaining_time_in_millis(self):
+                return 40_000
+        spec = importlib.util.spec_from_file_location("burn_rate_handler_real",
+                                                      ROOT / "lambda" / "handler.py")
+        real = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real)
+        ctx = real.burn_rate_context(LambdaContext())
+        self.assertAlmostEqual(ctx.lambda_remaining(), 40.0)
+        self.assertIsNone(real.burn_rate_context(None).lambda_remaining)
 
     def test_alarm_event_routed(self):
         result = self.handler.handler(alarm_event("ALARM", T1, failed=9))
@@ -529,11 +583,13 @@ class TerraformConsistencyTests(unittest.TestCase):
             self.assertEqual(tf_value(block, actions), "[]")
 
     def test_threshold_arithmetic(self):
-        budget = 7 * 24 * 60 * (1 - br.SLO)
-        self.assertAlmostEqual(budget, br.ERROR_BUDGET_MINUTES)
-        rate = lambda failed: failed / br.EVALUATION_PERIODS / (1 - br.SLO)  # noqa: E731
-        self.assertGreater(rate(br.DATAPOINTS_TO_ALARM), br.DESIGN_BURN_RATE)
-        self.assertLessEqual(rate(br.DATAPOINTS_TO_ALARM - 1), br.DESIGN_BURN_RATE)
+        # Design rationale only (Runbook §13.1); messages no longer show it.
+        slo, design_rate = 0.99, 14.4
+        self.assertAlmostEqual(7 * 24 * 60 * (1 - slo), 100.8)
+        rate = lambda failed: failed / br.EVALUATION_PERIODS / (1 - slo)  # noqa: E731
+        self.assertGreater(rate(br.DATAPOINTS_TO_ALARM), design_rate)
+        self.assertLessEqual(rate(br.DATAPOINTS_TO_ALARM - 1), design_rate)
+        self.assertIn("9 failed samples = 15x burn rate", tf("burn_rate.tf"))
 
     def test_rule_matches_only_this_alarm_and_is_gated(self):
         text = tf("burn_rate.tf")
