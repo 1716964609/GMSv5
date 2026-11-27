@@ -10,6 +10,7 @@ import os
 import random
 import re
 import sys
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -207,12 +208,9 @@ class DataQualityTests(unittest.TestCase):
 
 
 class FetchTests(unittest.TestCase):
-    def left(self):
-        return 30
-
     def test_fixed_query_and_half_open_window(self):
         stub = StubCloudWatch(page(*minutes("O" * 60)))
-        data = brc.fetch_metric(stub, START, END, self.left)
+        data = brc.fetch_metric(stub, START, END)
         self.assertTrue(data["complete"])
         call = stub.calls[0]
         self.assertEqual((call["StartTime"], call["EndTime"]), (START, END))
@@ -239,7 +237,7 @@ class FetchTests(unittest.TestCase):
             stub.add_response("get_metric_data", page(stamps, values), {
                 "MetricDataQueries": brc.query(), "StartTime": START, "EndTime": END,
                 "ScanBy": "TimestampAscending"})
-            data = brc.fetch_metric(client, START, END, self.left)
+            data = brc.fetch_metric(client, START, END)
             stub.assert_no_pending_responses()
         s = brc.summarize(data["timestamps"], data["values"], START, END, data["complete"])
         self.assertEqual((s["ok"], s["failed"], s["episodes"]), (58, 2, 1))
@@ -260,7 +258,7 @@ class FetchTests(unittest.TestCase):
         first = minutes("O" * 30)
         second = minutes("F" * 30, start=START + timedelta(minutes=30))
         stub = StubCloudWatch(page(*first, code="PartialData", token="t1"), page(*second))
-        data = brc.fetch_metric(stub, START, END, self.left)
+        data = brc.fetch_metric(stub, START, END)
         self.assertTrue(data["complete"])
         self.assertEqual(stub.calls[1]["NextToken"], "t1")
         s = brc.summarize(data["timestamps"], data["values"], START, END, data["complete"])
@@ -268,7 +266,7 @@ class FetchTests(unittest.TestCase):
 
     def test_partial_data_without_more_pages_is_flagged(self):
         stub = StubCloudWatch(page(*minutes("O" * 20), code="PartialData"))
-        data = brc.fetch_metric(stub, START, END, self.left)
+        data = brc.fetch_metric(stub, START, END)
         self.assertFalse(data["complete"])
         s = brc.summarize(data["timestamps"], data["values"], START, END, data["complete"])
         self.assertIn("partial API response", brc.window_lines(s)[0])
@@ -276,7 +274,7 @@ class FetchTests(unittest.TestCase):
     def test_page_limit_is_bounded(self):
         pages = [page(*minutes("O"), code="PartialData", token=f"t{i}") for i in range(5)]
         stub = StubCloudWatch(*pages)
-        data = brc.fetch_metric(stub, START, END, self.left)
+        data = brc.fetch_metric(stub, START, END)
         self.assertEqual(len(stub.calls), brc.MAX_PAGES)
         self.assertFalse(data["complete"])
 
@@ -287,14 +285,21 @@ class FetchTests(unittest.TestCase):
                            (page([START], [], code="Complete"), "malformed result"),
                            ({"MetricDataResults": [{"Id": "other"}]}, "no result for the query")):
             with self.assertRaises(brc.QueryFailed) as caught:
-                brc.fetch_metric(StubCloudWatch(body), START, END, self.left)
+                brc.fetch_metric(StubCloudWatch(body), START, END)
             self.assertEqual(brc.error_name(caught.exception), name)
 
     def test_no_call_without_budget(self):
         stub = StubCloudWatch()
         with self.assertRaises(brc.BudgetExhausted):
-            brc.fetch_metric(stub, START, END, lambda: brc.CALL_WORST_SECONDS - 1)
+            brc.fetch_metric(stub, START, END,
+                             lambda fn: brc.bounded(fn, brc.MIN_START_SECONDS - 0.1))
         self.assertEqual(stub.calls, [])
+
+    def test_later_page_failure_keeps_the_first_page_as_partial(self):
+        stub = StubCloudWatch(page(*minutes("O" * 30), code="PartialData", token="t1"),
+                              client_error("ThrottlingException"))
+        data = brc.fetch_metric(stub, START, END)
+        self.assertEqual((len(data["timestamps"]), data["complete"]), (30, False))
 
 
 class NowTests(unittest.TestCase):
@@ -346,10 +351,26 @@ class NowTests(unittest.TestCase):
         self.assertEqual(self.line(row), "Now: DOWN — since: unknown; 2 consecutive failed checks")
 
     def test_reads_the_existing_row_with_the_existing_key(self):
-        table = FakeTable()
-        table.items[("http#sunlightjetrans.com", "~STATE")] = http_row(last_slot="x")
-        self.assertEqual(brc.fetch_http_row(table)["last_slot"], "x")
-        self.assertEqual(table.calls[0][0], "get_item")
+        # Low-level client validated against the DynamoDB API model; no network.
+        import boto3
+        from botocore.stub import Stubber
+        client = boto3.Session(aws_access_key_id="test", aws_secret_access_key="test",
+                               region_name="ap-northeast-1").client("dynamodb")
+        with Stubber(client) as stub:
+            stub.add_response("get_item", {"Item": {
+                "instance_id": {"S": "http#sunlightjetrans.com"}, "event_time": {"S": "~STATE"},
+                "last_slot": {"S": "2026-11-24T00:08"}, "http_status": {"S": "down"},
+                "http_failures": {"N": "3"}, "first_fail_at": {"S": "2026-11-24T00:06:04Z"}}},
+                {"TableName": "gmsv5-availability-events", "ConsistentRead": True,
+                 "Key": {"instance_id": {"S": "http#sunlightjetrans.com"},
+                         "event_time": {"S": "~STATE"}}})
+            row = brc.fetch_http_row(client, "gmsv5-availability-events")
+        self.assertEqual(row["http_failures"], 3)
+        self.assertEqual(self.line(row), "Now: DOWN — 2 min (since first failed check 09:06 JST); "
+                                         "3 consecutive failed checks")
+        with Stubber(client) as stub:
+            stub.add_response("get_item", {})
+            self.assertEqual(brc.fetch_http_row(client, "t"), {})
         handler_source = (ROOT / "lambda" / "handler.py").read_text()
         self.assertIn('HTTP_STATE_ID = "http#sunlightjetrans.com"', handler_source)
         for field in ("last_slot", "http_failures", "http_status", "first_fail_at", "down_since"):
@@ -368,7 +389,7 @@ class ContextTests(unittest.TestCase):
                 raise row_error
             return self.row if row is None else row
         return brc.Context(http_row=read,
-                           metrics=lambda s, e, left: brc.fetch_metric(cw, s, e, left),
+                           metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call),
                            now=lambda: NOW, clock=self.clock, lambda_remaining=lambda_remaining)
 
     def test_lines(self):
@@ -382,7 +403,7 @@ class ContextTests(unittest.TestCase):
     def test_window_uses_the_event_not_the_clock(self):
         cw = StubCloudWatch(page([], []))
         ctx = brc.Context(http_row=lambda: self.row,
-                          metrics=lambda s, e, left: brc.fetch_metric(cw, s, e, left),
+                          metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call),
                           now=lambda: NOW + timedelta(hours=5), clock=self.clock)
         ctx.lines(br.state_time(T1))
         self.assertEqual((cw.calls[0]["StartTime"], cw.calls[0]["EndTime"]), (START, END))
@@ -410,17 +431,23 @@ class ContextTests(unittest.TestCase):
         cw = StubCloudWatch()
 
         def slow():
-            self.clock.t += 20
+            self.clock.t += brc.BUDGET_SECONDS - 1
             return self.row
         ctx = brc.Context(http_row=slow, now=lambda: NOW, clock=self.clock,
-                          metrics=lambda s, e, left: brc.fetch_metric(cw, s, e, left))
+                          metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call))
         lines = ctx.lines(br.state_time(T1))
         self.assertEqual(lines[1], "Last 60 completed min: unavailable (time budget)")
         self.assertEqual(cw.calls, [])
 
+    def test_deadline_is_the_earlier_of_budget_and_lambda_reserve(self):
+        ctx = self.context(StubCloudWatch(), lambda_remaining=lambda: 40)
+        self.assertEqual(ctx.remaining(), 40 - brc.NOTIFY_RESERVE_SECONDS)
+        ctx = self.context(StubCloudWatch(), lambda_remaining=lambda: 89)
+        self.assertEqual(ctx.remaining(), brc.BUDGET_SECONDS)
+
     def test_lambda_time_left_limits_lookups(self):
         cw = StubCloudWatch()
-        ctx = self.context(cw, lambda_remaining=lambda: brc.NOTIFY_RESERVE_SECONDS + 5)
+        ctx = self.context(cw, lambda_remaining=lambda: brc.NOTIFY_RESERVE_SECONDS + 1)
         lines = ctx.lines(br.state_time(T1))
         self.assertEqual(lines, ["Now: UNKNOWN — HTTP state unavailable (time budget)",
                                  "Last 60 completed min: unavailable (time budget)"])
@@ -433,7 +460,7 @@ def live_context(cw=None, row=None):
     row = row or http_row(last_slot="2026-11-24T00:08", http_status="down", http_failures=4,
                           first_fail_at="2026-11-24T00:04:03Z", down_since="2026-11-24T00:04:03Z")
     ctx = brc.Context(http_row=lambda: row, now=lambda: NOW, clock=clock,
-                      metrics=lambda s, e, left: brc.fetch_metric(cw, s, e, left))
+                      metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call))
     return ctx, cw
 
 
@@ -499,7 +526,7 @@ class FlowWithContextTests(unittest.TestCase):
         h = Harness()
         cw = StubCloudWatch(client_error("AccessDenied"))
         ctx = brc.Context(http_row=lambda: (_ for _ in ()).throw(TimeoutError()),
-                          metrics=lambda s, e, left: brc.fetch_metric(cw, s, e, left),
+                          metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call),
                           now=lambda: NOW, clock=Clock())
         self.assertEqual(self.run_with(h, alarm_event("ALARM", T1), ctx)["sent"], ["alarm"])
         self.assertIn("Now: UNKNOWN — HTTP state unavailable (TimeoutError)", h.sent[0])
@@ -544,7 +571,7 @@ class ShadowContextTests(unittest.TestCase):
         records = [json.loads(r.getMessage()) for r in logs.records
                    if r.getMessage().startswith("{") and '"shadow"' in r.getMessage()]
         (record,) = records
-        self.assertEqual(record["would_send"], "alarm")
+        self.assertEqual((record["would_send"], record["delivered"]), ("alarm", False))
         self.assertTrue(record["message"].startswith("HIGH — Availability Burn Rate: ALARM\n"))
         self.assertIn("Now: DOWN — 4 min", record["message"])
         self.assertIn("failed 9 / ok 51 / missing 0", record["message"])
@@ -561,54 +588,79 @@ class ShadowContextTests(unittest.TestCase):
         self.assertEqual(h.sent, [])
 
 
-class PreviewTests(unittest.TestCase):
-    def test_preview_renders_four_texts_reads_once_and_writes_nothing(self):
-        ctx, cw = live_context()
-        with self.assertLogs(br.LOG, "INFO"):
-            result = br.preview(context=ctx, now=lambda: NOW, alarm_name=NAME)
-        texts = result["preview"]
-        self.assertEqual(set(texts), {"alarm", "normalized", "insufficient", "data_restored"})
-        for text in texts.values():
-            self.assertTrue(text.startswith("PREVIEW (not sent)\n"))
-            self.assertIn("Now: DOWN — 4 min", text)
-        # Window ends at the preview time: [23:08, 00:08) UTC.
-        self.assertEqual(cw.calls[0]["EndTime"], datetime(2026, 11, 24, 0, 8, tzinfo=UTC))
-        self.assertEqual((len(cw.calls), ctx.calls), (1, {"http_row": 1, "metrics": 1}))
+class HardDeadlineTests(unittest.TestCase):
+    """Real threads and the real clock: a hung call is abandoned at the deadline."""
+
+    def hung(self, release):
+        def call(*args, **kwargs):
+            release.wait(10)
+            raise AssertionError("released")
+        return call
+
+    def test_hung_lookups_are_abandoned_at_the_deadline(self):
+        import time as real_time
+        release = threading.Event()
+        self.addCleanup(release.set)
+        cw = StubCloudWatch()
+        cw.get_metric_data = self.hung(release)
+        ctx = brc.Context(http_row=self.hung(release), now=lambda: NOW,
+                          metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call),
+                          budget_seconds=brc.MIN_START_SECONDS + 0.5)
+        began = real_time.monotonic()
+        lines = ctx.lines(br.state_time(T1))
+        elapsed = real_time.monotonic() - began
+        self.assertEqual(lines, ["Now: UNKNOWN — HTTP state unavailable (deadline)",
+                                 "Last 60 completed min: unavailable (time budget)"])
+        self.assertLess(elapsed, brc.MIN_START_SECONDS + 1.5)
+
+    def test_hung_metrics_call_is_abandoned(self):
+        import time as real_time
+        release = threading.Event()
+        self.addCleanup(release.set)
+        cw = StubCloudWatch()
+        cw.get_metric_data = self.hung(release)
+        ctx = brc.Context(http_row=lambda: http_row(last_slot="2026-11-24T00:08",
+                                                    http_status="up", http_failures=0),
+                          now=lambda: NOW, budget_seconds=brc.MIN_START_SECONDS + 0.4,
+                          metrics=lambda s, e, call: brc.fetch_metric(cw, s, e, call))
+        began = real_time.monotonic()
+        lines = ctx.lines(br.state_time(T1))
+        self.assertEqual(lines, ["Now: UP (last check 09:08 JST)",
+                                 "Last 60 completed min: unavailable (deadline)"])
+        self.assertLess(real_time.monotonic() - began, brc.MIN_START_SECONDS + 1.5)
+
+    def test_bounded_passes_values_and_errors(self):
+        self.assertEqual(brc.bounded(lambda: 7, 5), 7)
+        with self.assertRaises(ZeroDivisionError):
+            brc.bounded(lambda: 1 / 0, 5)
 
 
 class LambdaWiringTests(unittest.TestCase):
     def setUp(self):
         brc.cloudwatch.cache_clear()
-        brc.table.cache_clear()
+        brc.dynamodb.cache_clear()
         self.addCleanup(brc.cloudwatch.cache_clear)
-        self.addCleanup(brc.table.cache_clear)
+        self.addCleanup(brc.dynamodb.cache_clear)
 
-    def test_bounded_clients_in_tokyo(self):
+    def test_bounded_low_level_clients(self):
         calls = []
-        with patch("boto3.client", side_effect=lambda *a, **k: calls.append((a, k)) or "cw"):
+        with patch("boto3.client", side_effect=lambda *a, **k: calls.append((a, k)) or "c"), \
+                patch("boto3.resource", side_effect=AssertionError("resources are not thread safe")):
             brc.cloudwatch()
-        (args, kwargs), = calls
-        self.assertEqual(args, ("cloudwatch",))
-        self.assertEqual(kwargs["region_name"], "ap-northeast-1")
-        config = kwargs["config"]
-        self.assertEqual((config.connect_timeout, config.read_timeout), (2, 3))
-        self.assertEqual(config.retries, {"mode": "standard", "total_max_attempts": 2})
-
-        class Resource:
-            def Table(self, name):  # noqa: N802 - boto3 API
-                return ("table", name)
-        resources = []
-        with patch.dict(os.environ, {"TABLE_NAME": "t"}), \
-                patch("boto3.resource", side_effect=lambda *a, **k: resources.append(k) or Resource()):
-            self.assertEqual(brc.table(), ("table", "t"))
-        self.assertEqual(resources[0]["config"].retries["total_max_attempts"], 2)
+            brc.dynamodb()
+        self.assertEqual([a for a, _ in calls], [("cloudwatch",), ("dynamodb",)])
+        self.assertEqual(calls[0][1]["region_name"], "ap-northeast-1")
+        for _, kwargs in calls:
+            config = kwargs["config"]
+            self.assertEqual((config.connect_timeout, config.read_timeout), (2, 3))
+            self.assertEqual(config.retries, {"mode": "standard", "total_max_attempts": 2})
 
     def test_time_limits_fit_inside_the_lease(self):
-        per_call = brc.TOTAL_ATTEMPTS * (brc.CONNECT_TIMEOUT + brc.READ_TIMEOUT)
-        self.assertGreater(brc.CALL_WORST_SECONDS, per_call)
-        # Context + notify (8 s urlopen) + DynamoDB writes stay well inside the 90 s lease.
-        self.assertLess(brc.BUDGET_SECONDS + 8 + 10, br.LEASE_SECONDS)
-        self.assertGreaterEqual(brc.NOTIFY_RESERVE_SECONDS, 8 + 10)
+        # Lookups end by min(start + 30 s, Lambda end - 25 s); the lease and
+        # the Lambda timeout are both 90 s.
+        self.assertLess(brc.BUDGET_SECONDS + brc.NOTIFY_RESERVE_SECONDS, br.LEASE_SECONDS)
+        self.assertGreaterEqual(brc.NOTIFY_RESERVE_SECONDS, 8 + 10)  # urlopen 8 s + writes
+        self.assertLess(brc.MIN_START_SECONDS, brc.BUDGET_SECONDS)
 
     def test_nothing_from_the_event_selects_the_metric(self):
         event = alarm_event("ALARM", T1)

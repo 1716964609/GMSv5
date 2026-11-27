@@ -43,7 +43,8 @@
 > ([As-Built](./availability-burn-rate-as-built-2026-11-27.md)). The
 > 2026-11-28 message redesign (§13.4, §13.11: current HTTP state and the
 > last 60 minutes instead of an observed burn rate) is committed and tested
-> locally (223 tests in total) but **not applied**.
+> locally (240 tests in total) but **not applied**. Its shadow ledger
+> and hard lookup deadline were added on 2026-11-28 after review.
 
 ## 1. Architecture
 
@@ -822,12 +823,14 @@ errors through another path is not part of P2.
 Records: one row, `instance_id = burnrate#gmsv5-availability-burn-rate-fast`,
 `event_time = ~STATE`. It is separate from EC2, `http#`, `deployment#`
 and `spot#` rows and has no TTL. Writes happen only on alarm state
-changes: 3 updates per delivered notification. None happen per minute.
+changes: 3 updates per delivered notification, 2 per shadow-logged one.
+None happen per minute.
 
 | Attribute | Meaning |
 |---|---|
 | `alarm_state`, `state_at`, `previous_state`, `event_id`, `reason_kind` | The newest accepted state change. `state_at` is `detail.state.timestamp` in UTC with ms |
-| `notified_state`, `notified_at` | The last message actually delivered, and the state it was for |
+| `notified_state`, `notified_at` | **Live ledger.** The last message actually delivered, and the state it was for. Written only by `live` |
+| `shadow_notified_state`, `shadow_notified_at` | **Shadow ledger.** The last message logged (not delivered) in `shadow`. Written only by `shadow`; `live` never reads it |
 | `lease_at`, `lease_until` | A send in progress (90 s lease, equal to the Lambda timeout) |
 
 Rules:
@@ -896,7 +899,7 @@ The variable `burn_rate_alarm_rollout` in `variables.tf` sets both gates:
 | Value | EventBridge rule | `BURN_RATE_DELIVERY` | Effect |
 |---|---|---|---|
 | `off` (default) | `DISABLED` | `disabled` | Alarm evaluates. The Lambda is not invoked |
-| `shadow` | `ENABLED` | `disabled` | The Lambda records state and logs `{"burn_rate": "shadow", "would_send": ..., "message": "<full text>"}`, with live context. No Discord message |
+| `shadow` | `ENABLED` | `disabled` | The Lambda records state and logs `{"burn_rate": "shadow", "delivered": false, "would_send": ..., "message": "<full text>"}`, with production context. No Discord message |
 | `live` | `ENABLED` | `enabled` | Discord messages |
 
 Change the default in `variables.tf` in a reviewed commit for each
@@ -912,26 +915,27 @@ Changing stages:
   because nothing was delivered for it. The next transition is handled
   normally.
 
-**What `shadow` shows.** Shadow never records a delivery, so it logs
-only what `live` would send first: ALARM and INSUFFICIENT_DATA. The OK
-that follows is owed nothing, so NORMALIZED and DATA RESTORED never
-appear in shadow. A redelivered event is not logged again and makes no
-context lookup. While the site is healthy the alarm stays OK and shadow
-logs nothing. To check the message text against the production HTTP
-state row and `HTTPUp` without touching the alarm, use the preview:
+**What `shadow` shows.** Shadow follows the same lifecycle as `live`:
+ALARM, NORMALIZED, DATA INSUFFICIENT and DATA RESTORED are logged when
+`live` would send them, with the full text and production context. It
+decides from its own ledger (`shadow_notified_*`, §13.4), so:
 
-```bash
-aws lambda invoke --profile gms-admin --region ap-northeast-1 \
-  --function-name gmsv5-availability --cli-binary-format raw-in-base64-out \
-  --payload '{"source":"gmsv5.manual-test","test_mode":true,"burn_rate_preview":true}' \
-  /tmp/burn-rate-preview.json && jq -r '.preview.alarm' /tmp/burn-rate-preview.json
-```
+- Each owed message is logged at most once. Shadow marks its ledger with
+  a conditional write **before** logging, so a duplicate, older or
+  concurrent event logs nothing and makes no context lookup. If the
+  function dies between the mark and the log line, that one shadow
+  message is missing from the log (no retry); `live` is unaffected.
+- ALARM → INSUFFICIENT_DATA logs DATA INSUFFICIENT, never NORMALIZED.
+  The later OK logs DATA RESTORED.
+- Shadow writes neither `notified_*` nor a lease. A shadow message is
+  never a delivery: the log line says `"delivered": false`, and the
+  result lists it as `shadow:<kind>`.
+- `live` ignores the shadow ledger. After `shadow` → `live`, live starts
+  from its own (empty) ledger as described above. A later `live` →
+  `shadow` switch starts shadow from its old ledger, so its first log
+  line can refer to a state that `live` already announced.
 
-It renders all four messages as if the alarm changed state now, each
-starting with `PREVIEW (not sent)`, with one HTTP row read and one
-GetMetricData call. It sends nothing, writes nothing and works in every
-stage, including `off`. The window ends at the current minute, not at an
-alarm transition.
+While the site is healthy the alarm stays OK and shadow logs nothing.
 
 **Alarm state check around the `live` switch.** Run immediately before
 the apply and again immediately after it:
@@ -1006,11 +1010,10 @@ How it was run, for a repeat:
 The production ARN check rejected the test events as `unmonitored
 alarm`; it must never be relaxed for a test.
 
-**Lambda path (not yet tested).** The message text with production
-context can be checked with the preview (§13.5) in any stage. Delivery
-of a real state-change event to the function is first seen in `shadow`
-when the alarm next changes state. Forcing that with
-`aws cloudwatch set-alarm-state` on the production alarm is a
+**Lambda path (not yet tested).** Delivery of a real state-change event
+to the function, and the message text with production context, are
+first seen in `shadow` when the alarm next changes state. Forcing that
+with `aws cloudwatch set-alarm-state` on the production alarm is a
 notification-path test only, never a test of the 9-of-60 evaluation,
 and needs separate Product Owner approval. In `live` it sends real
 messages.
@@ -1046,9 +1049,9 @@ Additionally after the message redesign apply:
   `cloudwatch:GetMetricData` and the `aws:RequestedRegion` condition:
   `aws iam get-role-policy --role-name gmsv5-availability-lambda-role
   --policy-name gmsv5-availability-runtime --query 'PolicyDocument.Statement[].Sid'`.
-- The preview (§13.5) returns four texts whose `Now` line matches the
-  latest HTTP check and whose `Last 60` line shows no `unavailable`. An
-  `AccessDenied` there means the IAM statement is missing.
+- Production context is first exercised in `shadow` (§13.5). There, a
+  `Last 60 completed min: unavailable (AccessDenied)` line means the IAM
+  statement is missing.
 
 Do not print the ARN-bearing outputs into documents. They contain the
 account ID.
@@ -1080,7 +1083,7 @@ account ID.
 | Lambda | A few invocations per state change. The backtest had 4 episodes in 10 days, so a few dozen per month. Negligible, within the free tier |
 | DynamoDB (on-demand) | About 3 writes and 3–5 reads per notification. Negligible |
 | CloudWatch Logs | A few lines per state change. Negligible |
-| GetMetricData (2026-11-28 redesign) | One metric requested per message sent or shadow-logged, and per preview. List price USD 0.01 per 1,000 metrics requested; not in the free tier. A few dozen per month: below USD 0.001 |
+| GetMetricData (2026-11-28 redesign) | One metric requested per message sent or shadow-logged. List price USD 0.01 per 1,000 metrics requested; not in the free tier. A few dozen per month: below USD 0.001 |
 | DynamoDB for `Now` | One strongly consistent read of the existing HTTP row per message. Negligible |
 | Integration test (§13.6) | About USD 0.01–0.02, once (2026-11-27) |
 
@@ -1098,7 +1101,8 @@ account ID.
   No meta-alarm.
 - Delivery is at least once with the residual cases in §13.4. No DLQ: a
   message whose three attempts all fail is lost (log line only).
-- `shadow` cannot show NORMALIZED or DATA RESTORED (§13.5).
+- The 25 s left for `notify()` and its record is a reserve the lookups
+  never use, not a bound on `notify()` itself (§13.11).
 - The alarm sees only the external ingress probe (HTTP 200 on `/`), not
   translation API success. P3 covers translation metrics separately.
 
@@ -1108,12 +1112,11 @@ account ID.
 lines. Both lookups are read only and best effort.
 
 **When.** Only for a message that is about to be sent, after the lease
-is claimed, or that is logged in `shadow` for a newly accepted state, and
-in the preview. Events rejected by the ARN and name check, older or
+is claimed, or that is logged in `shadow` after its ledger mark. Events rejected by the ARN and name check, older or
 duplicate events, held leases and states owed nothing make no lookup.
 A Lambda retry after a failed send looks up again.
 
-**Now.** One `GetItem` (strongly consistent, existing permission) of the
+**Now.** One `GetItem` (strongly consistent, low-level client, existing permission) of the
 existing HTTP row `instance_id = http#sunlightjetrans.com`,
 `event_time = ~STATE`, written by the scheduled probe
 (`track_http_status` in `handler.py`):
@@ -1151,13 +1154,35 @@ does not matter. `PartialData` follows `NextToken` up to 2 pages, then
 the line says `partial API response`. `Forbidden`, `InternalError` or a
 malformed response make the line `unavailable`.
 
-**Time limits.** Separate clients for these lookups: 2 s connect, 3 s
-read, standard retry mode, 2 attempts in total. A call starts only if
-13 s (its worst case) remain in a 30 s budget per invocation, and 25 s
-of Lambda time remain for `notify()` and the delivery record. Worst case
-about 30 s, inside the 90 s lease and timeout. Measured locally: under
-1 ms for the count and about 2 MB more memory for the clients; the
-Lambda used at most 95 MB of 128 MB before.
+**Time limits.** SDK timeouts apply per socket operation, so they do
+not bound a call. The bound is a wall-clock deadline in the code:
+
+| Limit | Guaranteed by | Value |
+|---|---|---|
+| Deadline for all lookups of one invocation | Code (each call runs in a daemon thread; the caller waits only until the deadline, then abandons it) | `min(t0 + 30 s, Lambda end − 25 s)`, `t0` = start of the burn rate handling, before `accept` |
+| Lookups never use the last 25 s of the Lambda | Code (same deadline) | Lambda timeout 90 s; context waits end ≥ 25 s before it |
+| A lookup is not started | Code | When less than 2 s remain before the deadline |
+| Pages | Code | At most 2 GetMetricData calls, both under the same deadline |
+| Invocation length, lease | Lambda timeout | 90 s, equal to the lease (§13.4) |
+
+| Estimate (SDK and network dependent) | Value |
+|---|---|
+| One lookup when AWS answers | Tens of ms |
+| One lookup when timeouts fire | About 10–13 s: 2 attempts × (2 s connect + 3 s per read) plus standard-mode backoff. DNS is not covered by the connect timeout. A slow trickle can extend a read. The deadline cuts this off |
+| `notify()` | `urlopen` timeout 8 s per socket operation. On a cold container `relay_token()` calls SSM with SDK defaults (60 s connect and read, legacy retries). The delivery record uses the handler's table client with SDK defaults. Existing code shared with all notifications; not bounded by this change |
+
+So the 30 s and the 25 s are guaranteed as limits on the lookups: they
+never wait past the deadline and never eat into the last 25 s. They do
+not guarantee that `notify()` and the record finish in 25 s. If they
+overrun, the Lambda times out and its retry sends again (a possible
+duplicate, §13.4).
+
+An abandoned lookup keeps running in its thread until its own SDK
+timeouts end (estimate up to about 13 s), possibly across a Lambda freeze.
+Its result is discarded. The clients are low-level boto3 clients, which
+are thread safe (boto3 resources are not), separate from the handler's.
+Measured locally: under 1 ms for the count and about 2 MB more memory
+for the clients; the Lambda used at most 95 MB of 128 MB before.
 
 **IAM.** Statement `ReadBurnRateContextMetric`: `cloudwatch:GetMetricData`
 on `*`, condition `aws:RequestedRegion = ap-northeast-1`. GetMetricData

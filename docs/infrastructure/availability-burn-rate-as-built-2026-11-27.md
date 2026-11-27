@@ -150,32 +150,59 @@ The alarm is unchanged.
 - `lambda/burn_rate.py`: the Observed parsing and the burn rate, SLO and
   error budget lines are removed. The new line is `Alarm threshold: 9/60
   failed datapoints`. Context is looked up only after the lease is
-  claimed, or for a newly accepted state in shadow, and shadow logs the
-  full text. A read-only preview mode is added.
+  claimed, or after a shadow ledger mark.
 - `lambda/burn_rate_context.py` (new):
   - `Now` comes from the existing HTTP state row.
-  - `Last 60` and `Pattern` come from one `GetMetricData` call, with
-    bounded time and retries.
+  - `Last 60` and `Pattern` come from one `GetMetricData` call.
   - Details: Runbook §13.11.
 - `handler.py`: wiring only. `main.tf`: statement
   `ReadBurnRateContextMetric` (`cloudwatch:GetMetricData`, `*`,
   `aws:RequestedRegion = ap-northeast-1`).
 
+**Review fixes (Product Owner review, 2026-11-28, second commit).**
+
+- **Shadow lifecycle.** The first version decided shadow messages from
+  the live ledger (`notified_state`), which shadow never writes, so
+  NORMALIZED and DATA RESTORED could never be logged. Shadow now has its
+  own ledger, `shadow_notified_state` / `shadow_notified_at`, marked with
+  a conditional write before the log line. Live never reads it and shadow
+  never writes `notified_*` or a lease. All four kinds are logged with
+  `"delivered": false` (Runbook §13.5).
+- **Preview removed.** The read-only preview invocation path is gone
+  from the production Lambda. Production context is checked in `shadow`.
+- **Hard lookup deadline.** The first version checked the remaining
+  budget before each call, but SDK timeouts are per socket operation, so
+  a call could run past the 30 s budget. Each lookup now runs in a daemon
+  thread and is abandoned at `min(start + 30 s, Lambda end − 25 s)`. The
+  DynamoDB lookup uses a low-level (thread-safe) client. Guaranteed limits
+  and estimates are separated in Runbook §13.11.
+
 **Tests (local test).**
 
-- 223 tests in total, all passing.
-  - Burn rate state and messages: 55.
-  - Responder context: 55.
+- 240 tests in total, all passing.
+  - Burn rate state, messages and shadow lifecycle: 68.
+  - Responder context and deadlines: 59.
   - Other: 113 (unchanged).
+- The shadow tests cover:
+  - ALARM → OK;
+  - OK → INSUFFICIENT_DATA → OK;
+  - ALARM → INSUFFICIENT_DATA → OK, which is never NORMALIZED;
+  - the same event sequence giving the same kinds in live and in shadow;
+  - duplicate, stale, out-of-order and concurrent events;
+  - a state change after the read;
+  - both ledgers kept separate across `shadow` → `live`.
+- Deadline tests use real threads with hung calls and check that the
+  lines come back as `deadline` within the limit.
 - Of the 164 tests before the change:
   - 5 that checked the removed Observed output were replaced by tests
     that it is gone.
   - 7 were updated for the new message format and for the design
     constants that left the Lambda; their intent is unchanged.
-- Mutation runs on copies of the code detected 20 of 20 context
-  mutations and 10 of 10 state-handling mutations.
-- botocore's Stubber validated the request against the CloudWatch API
-  model.
+- Mutation runs on copies of the code detected all mutations:
+  - 28 of 28 for context, shadow ledger and deadline;
+  - 10 of 10 for state handling.
+- botocore's Stubber validated the GetMetricData and DynamoDB GetItem
+  requests against the API models.
 
 **Samples (local test, stub data).** Each is under 900 characters; the
 relay limit is 1,800.
@@ -246,7 +273,8 @@ unavailable (TimeoutError)` and `Last 60 completed min: unavailable
 | CloudWatch 9-of-60 evaluation incl. gaps | Measured (§4, §5) |
 | State, ordering, lease and message logic | Local test |
 | Message redesign | Local test and plan only. Not applied |
-| Production context (HTTP row, `HTTPUp`, IAM) | Pending: the preview (Runbook §13.5) after the redesign apply |
+| Shadow lifecycle (all four kinds, separate ledger) | Local test |
+| Production context (HTTP row, `HTTPUp`, IAM) | Pending: `shadow`, at the next alarm transition |
 | EventBridge → Lambda delivery of a real alarm event | Pending: `shadow` |
 | Discord delivery of a burn rate message | Pending: `live` |
 
@@ -263,16 +291,24 @@ unavailable (TimeoutError)` and `Last 60 completed min: unavailable
   data shows as missing.
 - **IAM:** the role can read any CloudWatch metric in Tokyo, because
   `GetMetricData` cannot be limited by resource or namespace.
-- **`shadow`:** it cannot show NORMALIZED or DATA RESTORED, and shows
-  nothing while the alarm stays OK.
+- **`shadow`:** it shows nothing while the alarm stays OK.
+- **Shadow log loss:** if the function dies between the shadow mark and
+  the log line, that shadow message is not logged. `live` is unaffected.
+- **`notify()` time:** the lookups never use the last 25 s of the
+  Lambda. `notify()` itself (SSM with SDK defaults on a cold container,
+  urlopen 8 s per socket operation) is not bounded by this change.
+- **Abandoned lookups:** a lookup cut off at the deadline keeps running
+  in a background thread until its SDK timeouts end. Its result is
+  discarded.
 
 ## 9. Rollback
 
 Runbook §13.8. In short:
 
 - **Stage `off`:** messages are already stopped.
-- **Message redesign:** revert its commit. The plan has 2 changes: the
-  Lambda code goes back to `d81c157`, and the IAM statement is removed.
+- **Message redesign:** revert its two commits (`a70f1b3` and the review
+  fix). The plan has 2 changes: the Lambda code goes back to `d81c157`,
+  and the IAM statement is removed.
 - **Whole feature:** revert both commits. The 4 resources are
   destroyed and the Lambda returns to the 2026-11-25 build.
 

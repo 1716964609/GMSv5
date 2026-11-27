@@ -497,13 +497,6 @@ def burn_rate_context(context=None):
 
 def handler(event: dict, context=None):
     cfg = configuration()
-    # Operator preview of burn rate message text: read only, never sent.
-    if (event.get("source") == "gmsv5.manual-test" and event.get("test_mode") is True
-            and event.get("burn_rate_preview") is True):
-        from burn_rate import preview
-
-        return preview(context=burn_rate_context(context), now=now_utc,
-                       alarm_name=os.environ.get("BURN_RATE_ALARM_NAME", ""))
     # Synthetic smoke test never pretends a real EC2 was stopped.
     if event.get("source") == "gmsv5.manual-test" and event.get("test_mode") is True:
         at = timestamp(now_utc())

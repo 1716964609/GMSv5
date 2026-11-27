@@ -14,6 +14,13 @@ Last 60 HTTPUp (Minimum, 60 s) for the 60 completed minutes before the alarm
 
 Both are best effort. A failure, a timeout or an exhausted time budget only
 replaces that line with "unavailable"; the notification is still sent.
+
+Time bound. SDK timeouts are per socket operation, so they do not bound a
+call. Each lookup therefore runs in a daemon thread and is waited for only
+until the invocation's lookup deadline: 30 s after the Context is created,
+and never later than 25 s before the Lambda timeout. A lookup still running
+at the deadline is abandoned (its result is discarded). Only thread-safe
+low-level clients are used, so an abandoned call cannot disturb a later one.
 The metric, dimension and region are fixed here; nothing from the event
 selects what is read. No burn rate, availability or error budget is computed.
 """
@@ -21,6 +28,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -40,12 +48,14 @@ HTTP_KEY = {"instance_id": "http#" + TARGET, "event_time": "~STATE"}
 STALE_SECONDS = 180
 CONFIRM_FAILURES = 2      # handler.track_http_status marks DOWN at the 2nd failure.
 
-# Time limits. Each AWS call: 2 s connect + 3 s read, at most 2 attempts.
+# SDK limits: they keep a single attempt short and stop retry storms, but
+# are per socket operation, so the hard bound is the deadline below.
 CONNECT_TIMEOUT, READ_TIMEOUT, TOTAL_ATTEMPTS = 2, 3, 2
-CALL_WORST_SECONDS = 13   # 2 x (2 + 3) s plus standard-mode backoff.
-BUDGET_SECONDS = 30       # All context lookups of one invocation.
-NOTIFY_RESERVE_SECONDS = 25  # Lambda time kept for notify() and the mark write.
-MAX_PAGES = 2             # 60 datapoints fit in one page; NextToken is unexpected.
+# Hard limits (wall clock, enforced by Context.call):
+BUDGET_SECONDS = 30          # All context lookups of one invocation.
+NOTIFY_RESERVE_SECONDS = 25  # Lambda time the lookups never eat into.
+MIN_START_SECONDS = 2        # Do not start a lookup with less time than this.
+MAX_PAGES = 2                # 60 datapoints fit in one page; NextToken is unexpected.
 
 JST = timezone(timedelta(hours=9), "JST")
 
@@ -56,6 +66,36 @@ class BudgetExhausted(Exception):
 
 class QueryFailed(Exception):
     """GetMetricData answered, but not with usable data. str() is a short code."""
+
+
+class DeadlineExceeded(Exception):
+    """The lookup was still running at the deadline and was abandoned."""
+
+
+def bounded(fn, timeout: float):
+    """Run fn() in a daemon thread and wait at most timeout seconds (wall clock)."""
+    if timeout < MIN_START_SECONDS:
+        raise BudgetExhausted()
+    box = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller.
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, name="burn-rate-context", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise DeadlineExceeded()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def direct(fn):
+    return fn()
 
 
 def sdk_config():
@@ -73,11 +113,11 @@ def cloudwatch():
 
 
 @lru_cache(maxsize=1)
-def table():
-    """Own bounded client; the handler's table() uses SDK defaults."""
+def dynamodb():
+    """Own bounded low-level client (thread safe, unlike boto3 resources)."""
     import boto3
 
-    return boto3.resource("dynamodb", config=sdk_config()).Table(os.environ["TABLE_NAME"])
+    return boto3.client("dynamodb", config=sdk_config())
 
 
 def utc(value: str) -> datetime:
@@ -167,8 +207,14 @@ def now_line(info: dict, now: datetime) -> str:
     return f"Now: UNKNOWN — {info.get('why', 'HTTP state unavailable')}"
 
 
-def fetch_http_row(source) -> dict:
-    return source.get_item(Key=HTTP_KEY, ConsistentRead=True).get("Item", {})
+def fetch_http_row(client, table_name: str) -> dict:
+    from boto3.dynamodb.types import TypeDeserializer
+
+    response = client.get_item(
+        TableName=table_name, ConsistentRead=True,
+        Key={name: {"S": value} for name, value in HTTP_KEY.items()})
+    deserializer = TypeDeserializer()
+    return {k: deserializer.deserialize(v) for k, v in (response.get("Item") or {}).items()}
 
 
 # ------------------------------------------------------ Last 60 minutes ----
@@ -187,19 +233,20 @@ def query():
     }]
 
 
-def fetch_metric(client, start: datetime, end: datetime, remaining) -> dict:
-    """GetMetricData for the fixed query. remaining() = seconds left in the budget."""
+def fetch_metric(client, start: datetime, end: datetime, call=direct) -> dict:
+    """GetMetricData for the fixed query. call(fn) runs each page under the deadline."""
     timestamps, values, complete, token = [], [], False, None
-    for _ in range(MAX_PAGES):
-        if remaining() < CALL_WORST_SECONDS:
-            if not timestamps and token is None:
-                raise BudgetExhausted()
-            break
+    for number in range(MAX_PAGES):
         kwargs = {"MetricDataQueries": query(), "StartTime": start, "EndTime": end,
                   "ScanBy": "TimestampAscending"}
         if token:
             kwargs["NextToken"] = token
-        page = client.get_metric_data(**kwargs)
+        try:
+            page = call(lambda: client.get_metric_data(**kwargs))
+        except Exception:  # noqa: BLE001 - a later page only makes the result partial.
+            if number == 0:
+                raise
+            break  # Keep the pages already read; reported as partial.
         result = next((r for r in page.get("MetricDataResults", [])
                        if r.get("Id") == QUERY_ID), None)
         if result is None:
@@ -297,6 +344,8 @@ def error_name(exc: Exception) -> str:
     """A short code for the message. Never the exception text from AWS."""
     if isinstance(exc, BudgetExhausted):
         return "time budget"
+    if isinstance(exc, DeadlineExceeded):
+        return "deadline"
     if isinstance(exc, QueryFailed):
         return str(exc)
     response = getattr(exc, "response", None)
@@ -310,26 +359,33 @@ def error_name(exc: Exception) -> str:
 # ------------------------------------------------------------ Context ----
 
 class Context:
-    """Per-invocation lookups with one shared time budget.
+    """Per-invocation lookups under one hard deadline.
 
     http_row():                 the HTTP state row (raises on failure)
-    metrics(start, end, left):  fetch_metric() result (raises on failure)
+    metrics(start, end, call):  fetch_metric() result; call(fn) bounds each call
     now():                      wall clock, UTC
     lambda_remaining():         optional, seconds left in the Lambda invocation
+
+    Deadline = min(creation + budget_seconds, Lambda end - NOTIFY_RESERVE_SECONDS),
+    fixed when the Context is created.
     """
 
     def __init__(self, *, http_row, metrics, now, lambda_remaining=None,
-                 clock=time.monotonic, log=None):
+                 clock=time.monotonic, log=None, budget_seconds=BUDGET_SECONDS):
         self.http_row, self.metrics, self.now = http_row, metrics, now
-        self.lambda_remaining, self.clock, self.log = lambda_remaining, clock, log
-        self.deadline = clock() + BUDGET_SECONDS
+        self.clock, self.log = clock, log
+        start = clock()
+        self.deadline = start + budget_seconds
+        if lambda_remaining is not None:
+            self.deadline = min(self.deadline,
+                                start + lambda_remaining() - NOTIFY_RESERVE_SECONDS)
         self.calls = {"http_row": 0, "metrics": 0}
 
     def remaining(self) -> float:
-        left = self.deadline - self.clock()
-        if self.lambda_remaining is not None:
-            left = min(left, self.lambda_remaining() - NOTIFY_RESERVE_SECONDS)
-        return left
+        return self.deadline - self.clock()
+
+    def call(self, fn):
+        return bounded(fn, self.remaining())
 
     def warn(self, part: str, exc: Exception):
         if self.log is not None:
@@ -337,10 +393,8 @@ class Context:
 
     def now_text(self) -> str:
         try:
-            if self.remaining() < CALL_WORST_SECONDS:
-                raise BudgetExhausted()
             self.calls["http_row"] += 1
-            row = self.http_row()
+            row = self.call(self.http_row)
             moment = self.now()
             return now_line(http_now(row if isinstance(row, dict) else {}, moment), moment)
         except Exception as exc:  # noqa: BLE001 - context never blocks a notification.
@@ -351,7 +405,7 @@ class Context:
         try:
             start, end = window(state_at)
             self.calls["metrics"] += 1
-            data = self.metrics(start, end, self.remaining)
+            data = self.metrics(start, end, self.call)
             return window_lines(summarize(data["timestamps"], data["values"], start, end,
                                           data["complete"]))
         except Exception as exc:  # noqa: BLE001 - context never blocks a notification.
@@ -363,8 +417,8 @@ class Context:
 
 
 def production(now, lambda_remaining=None, log=None) -> Context:
-    """The Lambda wiring: bounded clients, fixed query."""
+    """The Lambda wiring: bounded low-level clients, fixed query."""
     return Context(
-        http_row=lambda: fetch_http_row(table()),
-        metrics=lambda start, end, left: fetch_metric(cloudwatch(), start, end, left),
+        http_row=lambda: fetch_http_row(dynamodb(), os.environ["TABLE_NAME"]),
+        metrics=lambda start, end, call: fetch_metric(cloudwatch(), start, end, call),
         now=now, lambda_remaining=lambda_remaining, log=log)

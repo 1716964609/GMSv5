@@ -425,6 +425,8 @@ class ShadowTests(unittest.TestCase):
         self.assertEqual(h.row()["alarm_state"], "ALARM")
         self.assertNotIn("notified_state", h.row())
         self.assertNotIn("lease_until", h.row())
+        self.assertEqual((h.row()["shadow_notified_state"], h.row()["shadow_notified_at"]),
+                         ("ALARM", br.state_time(T1)))
 
     def test_switch_to_live_during_alarm(self):
         h = Harness(delivery="disabled")
@@ -439,6 +441,154 @@ class ShadowTests(unittest.TestCase):
             h = Harness(delivery=value)
             h.run(alarm_event("ALARM", T1, failed=9))
             self.assertEqual(h.sent, [], value)
+
+
+T4 = "2026-11-24T06:10:00.000+0000"
+LIVE_FIELDS = ("notified_state", "notified_at", "lease_at", "lease_until")
+
+
+class ShadowLifecycleTests(unittest.TestCase):
+    """Shadow logs what live would send, with its own ledger (shadow_notified_*)."""
+
+    def setUp(self):
+        self.h = Harness(delivery="disabled")
+
+    def run_logged(self, event):
+        with self.assertLogs(br.LOG, "INFO") as logs:
+            result = self.h.run(event)
+        records = [json.loads(r.getMessage()) for r in logs.records
+                   if r.getMessage().startswith('{"burn_rate": "shadow"')]
+        return result, records
+
+    def assert_no_live_fields(self):
+        row = self.h.row()
+        self.assertFalse([f for f in LIVE_FIELDS if f in row], row)
+        self.assertEqual(self.h.sent, [])
+
+    def test_alarm_then_normalized(self):
+        result, (alarm,) = self.run_logged(alarm_event("ALARM", T1))
+        self.assertEqual(result["sent"], ["shadow:alarm"])
+        self.assertTrue(alarm["message"].startswith("HIGH — Availability Burn Rate: ALARM\n"))
+        result, (normalized,) = self.run_logged(alarm_event("OK", T2, previous="ALARM"))
+        self.assertEqual(result["sent"], ["shadow:normalized"])
+        self.assertEqual((normalized["would_send"], normalized["delivered"]), ("normalized", False))
+        self.assertTrue(normalized["message"].startswith(
+            "HIGH — Availability Burn Rate: NORMALIZED (alarm back to OK)\n"))
+        self.assertIn("Alarm: ALARM -> OK", normalized["message"])
+        self.assertEqual(self.h.row()["shadow_notified_state"], "OK")
+        self.assert_no_live_fields()
+
+    def test_data_gap_and_restore(self):
+        self.h.run(alarm_event("OK", T1, previous="INSUFFICIENT_DATA"))  # initial: silent
+        self.assertNotIn("shadow_notified_state", self.h.row())
+        result, (gap,) = self.run_logged(alarm_event("INSUFFICIENT_DATA", T2))
+        self.assertEqual(result["sent"], ["shadow:insufficient"])
+        self.assertTrue(gap["message"].startswith("WARN — Availability Burn Rate: DATA INSUFFICIENT\n"))
+        result, (restored,) = self.run_logged(alarm_event("OK", T3, previous="INSUFFICIENT_DATA"))
+        self.assertEqual(result["sent"], ["shadow:data_restored"])
+        self.assertTrue(restored["message"].startswith("INFO — Availability Burn Rate: DATA RESTORED\n"))
+        self.assert_no_live_fields()
+
+    def test_alarm_to_insufficient_is_not_a_recovery(self):
+        self.h.run(alarm_event("ALARM", T1))
+        result, (gap,) = self.run_logged(alarm_event("INSUFFICIENT_DATA", T2, previous="ALARM"))
+        self.assertEqual(result["sent"], ["shadow:insufficient"])
+        self.assertNotIn("NORMALIZED", gap["message"])
+        self.assertIn("not proof of downtime or recovery", gap["message"])
+        _, (restored,) = self.run_logged(alarm_event("OK", T3, previous="INSUFFICIENT_DATA"))
+        self.assertEqual(restored["would_send"], "data_restored")
+        self.assertNotIn("NORMALIZED", restored["message"])
+
+    def test_same_sequence_as_live(self):
+        events = [alarm_event("OK", T1, previous="INSUFFICIENT_DATA"),
+                  alarm_event("ALARM", T2), alarm_event("ALARM", T2),
+                  alarm_event("OK", T3, previous="ALARM"),
+                  alarm_event("ALARM", T2),  # stale
+                  alarm_event("INSUFFICIENT_DATA", T4),
+                  alarm_event("OK", "2026-11-24T08:00:00.000+0000", previous="INSUFFICIENT_DATA")]
+        live, shadow = Harness(), Harness(delivery="disabled")
+        live_kinds = [k for e in events for k in live.run(e)["sent"]]
+        shadow_kinds = [k for e in events for k in shadow.run(e)["sent"]]
+        self.assertEqual(live_kinds, ["alarm", "normalized", "insufficient", "data_restored"])
+        self.assertEqual(shadow_kinds, ["shadow:" + k for k in live_kinds])
+        self.assertEqual(shadow.sent, [])
+
+    def test_duplicates_and_stale_events_log_once(self):
+        self.h.run(alarm_event("ALARM", T1))
+        for event in (alarm_event("ALARM", T1), alarm_event("ALARM", T1, event_id="other-id")):
+            self.assertEqual(self.h.run(event)["sent"], [])
+        self.h.run(alarm_event("OK", T2, previous="ALARM"))
+        self.assertEqual(self.h.run(alarm_event("ALARM", T1))["sent"], [])  # older than OK
+        self.assertEqual(self.h.row()["alarm_state"], "OK")
+
+    def test_out_of_order_ok_first(self):
+        self.assertEqual(self.h.run(alarm_event("OK", T2, previous="ALARM"))["sent"], [])
+        self.assertEqual(self.h.run(alarm_event("ALARM", T1))["sent"], [])
+
+    def test_unchecked_insufficient_is_silent(self):
+        event = alarm_event("INSUFFICIENT_DATA", T1, reason="Unchecked: Initial alarm creation")
+        self.assertEqual(self.h.run(event)["sent"], [])
+
+    def test_concurrent_shadow_mark_logs_once(self):
+        self.h.run(alarm_event("ALARM", T1))
+        row = self.h.table.items[KEY]
+        del row["shadow_notified_state"], row["shadow_notified_at"]
+        # Another invocation marks between this one's read and its mark.
+        original = br.shadow_mark
+
+        def racing(table, key, at, state):
+            original(table, key, at, state)
+            return original(table, key, at, state)
+        with patch.object(br, "shadow_mark", side_effect=racing):
+            self.assertEqual(self.h.run(alarm_event("ALARM", T1))["sent"], [])
+
+    def test_state_change_after_read_is_not_marked_on_the_new_state(self):
+        self.h.run(alarm_event("ALARM", T1))
+        row = self.h.table.items[KEY]
+        stale = dict(row)
+        del stale["shadow_notified_state"], stale["shadow_notified_at"]
+        del row["shadow_notified_state"], row["shadow_notified_at"]
+        # Another invocation accepted OK after this one read the ALARM row.
+        row.update(alarm_state="OK", previous_state="ALARM", state_at=br.state_time(T2))
+        snapshots = [stale]
+        original = br.current
+        with patch.object(br, "current",
+                          side_effect=lambda table, key: snapshots.pop(0) if snapshots
+                          else original(table, key)):
+            sent = br.reconcile(self.h.table, br.row_key(NAME), notify=self.h.notify,
+                                now=int(self.h.clock.timestamp()), deliver=False,
+                                alarm_name=NAME)
+        self.assertEqual(sent, [])  # nothing owed to an OK the shadow never saw ALARM for
+        self.assertNotIn("shadow_notified_at", self.h.row())
+
+    def test_live_ignores_the_shadow_ledger(self):
+        self.h.run(alarm_event("ALARM", T1))
+        self.h.run(alarm_event("OK", T2, previous="ALARM"))
+        self.h.delivery = "enabled"
+        # Shadow logged ALARM and NORMALIZED; live still announces the next episode.
+        self.assertEqual(self.h.run(alarm_event("ALARM", T3))["sent"], ["alarm"])
+        self.assertEqual(self.h.run(alarm_event("OK", T4, previous="ALARM"))["sent"], ["normalized"])
+        row = self.h.row()
+        self.assertEqual(row["notified_state"], "OK")
+        self.assertEqual(row["shadow_notified_state"], "OK")  # untouched since T2
+        self.assertEqual(row["shadow_notified_at"], br.state_time(T2))
+
+    def test_shadow_alarm_does_not_block_live_alarm_redelivery(self):
+        self.h.run(alarm_event("ALARM", T1))
+        self.h.delivery = "enabled"
+        # The same ALARM redelivered after the switch is still owed to live.
+        self.assertEqual(self.h.run(alarm_event("ALARM", T1))["sent"], ["alarm"])
+
+    def test_live_never_writes_the_shadow_ledger(self):
+        live = Harness()
+        for event in (alarm_event("ALARM", T1), alarm_event("OK", T2, previous="ALARM")):
+            live.run(event)
+        self.assertFalse([k for k in live.row() if k.startswith("shadow")])
+
+    def test_shadow_writes_two_updates_per_logged_state(self):
+        self.h.run(alarm_event("ALARM", T1))
+        writes = [c for c in self.h.table.calls if c[0] == "update_item"]
+        self.assertEqual(len(writes), 2)  # accept, shadow mark
 
 
 class IsolationTests(unittest.TestCase):
@@ -503,16 +653,10 @@ class HandlerRoutingTests(unittest.TestCase):
         self.handler.handler(alarm_event("ALARM", T1, failed=9))
         self.assertIn("Now: UP (last check 09:08 JST)\nLast 60 completed min: stub", self.sent[0])
 
-    def test_preview_is_read_only(self):
-        result = self.handler.handler({"source": "gmsv5.manual-test", "test_mode": True,
-                                       "burn_rate_preview": True})
-        self.assertEqual(len(result["preview"]), 4)
-        self.assertEqual((self.sent, self.table.items), ([], {}))
-        # Without test_mode it is neither a preview nor the synthetic test.
-        self.assertEqual(self.handler.handler({"source": "gmsv5.manual-test",
-                                               "burn_rate_preview": True}),
-                         {"ignored": "unsupported source"})
-        self.assertEqual(self.sent, [])
+    def test_no_preview_route(self):
+        # Removed on 2026-11-28: production context is checked in shadow.
+        self.assertNotIn("preview", (ROOT / "lambda" / "handler.py").read_text())
+        self.assertFalse(hasattr(br, "preview"))
 
     def test_real_context_uses_lambda_time_left(self):
         class LambdaContext:
@@ -523,8 +667,9 @@ class HandlerRoutingTests(unittest.TestCase):
         real = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(real)
         ctx = real.burn_rate_context(LambdaContext())
-        self.assertAlmostEqual(ctx.lambda_remaining(), 40.0)
-        self.assertIsNone(real.burn_rate_context(None).lambda_remaining)
+        # 40 s left: lookups must end 25 s before the Lambda timeout.
+        self.assertAlmostEqual(ctx.remaining(), 15.0, delta=0.5)
+        self.assertAlmostEqual(real.burn_rate_context(None).remaining(), 30.0, delta=0.5)
 
     def test_alarm_event_routed(self):
         result = self.handler.handler(alarm_event("ALARM", T1, failed=9))

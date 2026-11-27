@@ -14,6 +14,10 @@ and out-of-order deliveries never overwrite a newer state. Every invocation
 then reconciles: the notification owed for the CURRENT state is derived from
 the row, not from the event that triggered the invocation.
 
+Live and shadow keep separate ledgers: notified_* records what was actually
+delivered (live only); shadow_notified_* records what shadow logged and is
+never read by live.
+
 Delivery is at least once, best effort:
   claim (lease) -> notify() -> mark notified.
 A notification is marked delivered only after notify() returns. If notify()
@@ -106,9 +110,17 @@ def parse(event: dict, *, alarm_name: str, alarm_arn: str):
     return change
 
 
-def owed(item: dict) -> str | None:
-    """Which notification the current state still needs, given the last delivered one."""
-    current, delivered = item.get("alarm_state"), item.get("notified_state")
+LIVE_LEDGER = "notified_state"
+SHADOW_LEDGER = "shadow_notified_state"
+
+
+def owed(item: dict, ledger: str = LIVE_LEDGER) -> str | None:
+    """Which notification the current state still needs, given the last one recorded.
+
+    ledger: "notified_state" (live: actually delivered) or
+    "shadow_notified_state" (shadow: logged only). The two never mix.
+    """
+    current, delivered = item.get("alarm_state"), item.get(ledger)
     if current == "ALARM":
         return "alarm" if delivered != "ALARM" else None
     if current == "OK":
@@ -256,13 +268,38 @@ def mark(table, key: dict, at: str, state: str):
     )
 
 
-def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str,
-              context=None, fresh: bool = True):
-    """Send what the current state is owed. Loops when the state moved during a send.
+def shadow_mark(table, key: dict, at: str, state: str) -> bool:
+    """Record a shadow (logged, not delivered) notification. At most once per state.
 
-    Context (extra API calls) is read only for a message that is actually sent
-    after a successful claim, or logged in shadow mode for a newly accepted
-    state. Duplicates, stale events, held leases and nothing-owed exit first.
+    Touches only shadow_notified_*; never notified_*, lease_* or the state.
+    """
+    try:
+        table.update_item(
+            Key=key,
+            UpdateExpression="SET #shadow_state = :state, #shadow_at = :at",
+            ConditionExpression=("#state_at = :at AND "
+                                 "(attribute_not_exists(#shadow_at) OR #shadow_at <> :at)"),
+            ExpressionAttributeNames={"#state_at": "state_at",
+                                      "#shadow_state": "shadow_notified_state",
+                                      "#shadow_at": "shadow_notified_at"},
+            ExpressionAttributeValues={":state": state, ":at": at},
+        )
+        return True
+    except ClientError as exc:
+        if not is_conditional(exc):
+            raise
+    return False
+
+
+def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str,
+              context=None):
+    """Send (live) or log (shadow) what the current state is owed.
+
+    Live and shadow keep separate ledgers (notified_* and shadow_notified_*),
+    so shadow follows the same lifecycle as live without ever counting as a
+    delivery. Context (extra API calls) is read only for a message that is
+    sent after a successful claim, or logged after a successful shadow mark.
+    Duplicates, stale events, held leases and nothing-owed exit first.
     """
     sent = []
     for _ in range(MAX_RECONCILE_ROUNDS):
@@ -273,20 +310,19 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
         if lease is not None and int(lease) >= now:
             # Another invocation is sending. Its outcome decides what is owed.
             raise NotificationInFlight(f"lease held for {item.get('lease_at')}")
-        kind = owed(item)
+        kind = owed(item, LIVE_LEDGER if deliver else SHADOW_LEDGER)
         if kind is None:
             break
         at = item["state_at"]
         if not deliver:
-            if not fresh:
-                # Shadow never marks delivery, so a redelivered event would log again.
-                LOG.info(json.dumps({"burn_rate": "shadow_repeat_skipped", "state_at": at}))
-                break
+            # Mark first: a redelivered or concurrent event then logs nothing.
+            if not shadow_mark(table, key, at, item["alarm_state"]):
+                continue  # State or shadow ledger changed. Re-read and decide again.
             text = message(kind, item, alarm_name, context_lines(context, item))
-            LOG.info(json.dumps({"burn_rate": "shadow", "would_send": kind, "state_at": at,
-                                 "message": text}, ensure_ascii=False))
+            LOG.info(json.dumps({"burn_rate": "shadow", "delivered": False, "would_send": kind,
+                                 "state_at": at, "message": text}, ensure_ascii=False))
             sent.append("shadow:" + kind)
-            break
+            continue
         if not claim(table, key, at, now):
             continue  # State, delivery or lease changed. Re-read and decide again.
         try:
@@ -317,29 +353,5 @@ def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
                          "state_at": change["state_at"]}))
     # Duplicates and stale events still reconcile: a retry may complete a failed send.
     sent = reconcile(table, key, notify=notify, now=int(moment.timestamp()),
-                     deliver=delivery == "enabled", alarm_name=alarm_name,
-                     context=context, fresh=outcome == "accepted")
+                     deliver=delivery == "enabled", alarm_name=alarm_name, context=context)
     return {"burn_rate": outcome, "alarm_state": change["alarm_state"], "sent": sent}
-
-
-PREVIEW = {"alarm": ("OK", "ALARM"), "normalized": ("ALARM", "OK"),
-           "insufficient": ("OK", "INSUFFICIENT_DATA"),
-           "data_restored": ("INSUFFICIENT_DATA", "OK")}
-
-
-def preview(*, context, now, alarm_name: str) -> dict:
-    """Operator check of the message text with live context. Read only.
-
-    Renders all four messages as if the alarm had changed state now. It never
-    sends, never writes DynamoDB and never touches the alarm. Context is read
-    once and shared by the four texts.
-    """
-    moment = now().astimezone(timezone.utc)
-    at = f"{moment:%Y-%m-%dT%H:%M:%S}.{moment.microsecond // 1000:03d}Z"
-    lines = context_lines(context, {"state_at": at})
-    texts = {}
-    for kind, (previous, state) in PREVIEW.items():
-        item = {"alarm_state": state, "previous_state": previous, "state_at": at}
-        texts[kind] = "PREVIEW (not sent)\n" + message(kind, item, alarm_name, lines)
-    LOG.info(json.dumps({"burn_rate": "preview", "messages": texts}, ensure_ascii=False))
-    return {"preview": texts}
