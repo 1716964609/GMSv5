@@ -151,6 +151,10 @@ resource "aws_lambda_function" "availability" {
       DISCORD_TOKEN_PARAMETER = var.discord_token_parameter
       # Spot interruption reason evidence (lambda/spot_status.py); fails open.
       SPOT_STATUS_COLLECTION = "enabled"
+      # Burn rate alarm notifications (burn_rate.tf, lambda/burn_rate.py).
+      BURN_RATE_ALARM_NAME = aws_cloudwatch_metric_alarm.burn_rate_fast.alarm_name
+      BURN_RATE_ALARM_ARN  = aws_cloudwatch_metric_alarm.burn_rate_fast.arn
+      BURN_RATE_DELIVERY   = var.burn_rate_alarm_rollout == "live" ? "enabled" : "disabled"
     }
   }
   depends_on = [aws_iam_role_policy.lambda_runtime, aws_cloudwatch_log_group.lambda]

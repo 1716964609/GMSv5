@@ -520,4 +520,17 @@ def handler(event: dict, context=None):
         )
     if event.get("source") == "aws.ec2":
         return handle_ec2(event, context)
+    if event.get("source") == "aws.cloudwatch":
+        from burn_rate import handle as handle_burn_rate
+
+        return handle_burn_rate(
+            event,
+            table=table(),
+            notify=notify,
+            now=now_utc,
+            alarm_name=os.environ.get("BURN_RATE_ALARM_NAME", ""),
+            alarm_arn=os.environ.get("BURN_RATE_ALARM_ARN", ""),
+            # Anything other than "enabled" records state without sending (shadow).
+            delivery=os.environ.get("BURN_RATE_DELIVERY", "disabled"),
+        )
     return {"ignored": "unsupported source"}

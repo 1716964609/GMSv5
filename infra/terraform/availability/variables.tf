@@ -56,3 +56,17 @@ variable "observability_role_name" {
   type    = string
   default = "gmsv5-observability-role"
 }
+
+# Rollout gate. Do not rely on alarm actions: CloudWatch emits state-change
+# events to EventBridge whether or not the alarm has actions.
+#   off    - alarm evaluates; EventBridge rule DISABLED; Lambda not invoked.
+#   shadow - rule ENABLED; Lambda records state and logs, sends nothing.
+#   live   - rule ENABLED; Lambda sends Discord notifications.
+variable "burn_rate_alarm_rollout" {
+  type    = string
+  default = "off"
+  validation {
+    condition     = contains(["off", "shadow", "live"], var.burn_rate_alarm_rollout)
+    error_message = "Use off, shadow or live."
+  }
+}

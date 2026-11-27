@@ -33,6 +33,11 @@
 > role and 80 tests (113 in total). It was **deployed on 2026-11-25 at
 > 01:35 JST** ([As-Built](./spot-reason-tracking-as-built-2026-11-25.md)). Real Spot reason capture is not yet
 > verified. §1 and §2 still describe the rest of the module correctly.
+>
+> **Added 2026-11-27:** §13 describes the availability burn rate alarm
+> (P2): a CloudWatch alarm on `HTTPUp`, an EventBridge rule and
+> `lambda/burn_rate.py` in the same function. It is implemented and
+> tested locally (164 tests in total) but **not applied**.
 
 ## 1. Architecture
 
@@ -681,3 +686,307 @@ must show no changes.
 `spot#<instance-id>` expire by the existing 400-day TTL. The previous code
 never reads that partition or the new incident attributes. Keep them as
 evidence.
+
+## 13. Availability burn rate alarm (P2)
+
+**Status (2026-11-27): implemented and tested locally on branch
+`feat/availability-burn-rate-alarm`. Not applied. No production
+change.** CloudWatch's own evaluation of this alarm and delivery through
+EventBridge have not been tested; §13.6 and §13.7 are the procedures.
+Record the apply in a dated As-Built, not here.
+
+### 13.1 What it detects
+
+The alarm fires when the external HTTP probe has failed often enough
+in the last hour to consume the weekly error budget fast. It detects
+accumulated interruptions, for example repeated Spot stops. It does not
+replace the HTTP DOWN/RECOVERED notifications (§2), which report the
+current state.
+
+| Item | Value |
+|---|---|
+| SLO | 99 % availability, rolling 7 days. Error budget 100.8 min/week |
+| Metric | `GMS/Availability` `HTTPUp`, `Target=sunlightjetrans.com`, one sample per minute from the scheduled probe |
+| Alarm | `gmsv5-availability-burn-rate-fast`: `Minimum` over 60 s, `HTTPUp < 1` in at least **9 of the last 60** periods, `treat_missing_data = missing` |
+| Meaning on a full window | 9 failed samples = 15.0x burn rate, the first value above the 14.4x design threshold. 8 = 13.3x stays OK |
+| Not used | A short (5 min) window. In the backtest it split one episode into several |
+
+Backtest (evidence `cloudwatch-2026-11-27`, 15,645 expected minutes,
+105 failed samples, `burn-rate-backtest-v1.json`): 1h / 14.4x gives
+4 episodes, 197 active minutes, crossings at 11/17 09:08, 11/20 08:58,
+11/24 09:06 and 11/24 14:06 JST. Replaying the same evidence through the
+configured 9-of-60 rule (a local model, not CloudWatch) gives the same
+4 episodes and 197 minutes.
+
+Timing on real failures:
+
+- **ALARM** follows the ninth failed sample within the next one-minute
+  evaluation, plus metric ingestion delay (not measured).
+- **OK** comes only when fewer than 9 of the last 60 samples failed.
+  After 9 consecutive failures that is 52 minutes after the ninth one.
+  A NORMALIZED message can therefore arrive long after the site is back.
+  The HTTP RECOVERED notification is the signal for that.
+- **INSUFFICIENT_DATA** under `missing` requires every datapoint in the
+  evaluation range to be missing: the probe has published nothing for
+  60 minutes or more.
+
+### 13.2 CloudWatch evaluation is not identical to the backtest
+
+The backtest evaluated only windows with all 60 samples present.
+CloudWatch does not skip incomplete windows
+([missing data](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html),
+[alarm evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-evaluation.html)):
+
+- It retrieves more datapoints than the 60 evaluation periods. When some
+  are missing but at least 60 real ones are in that range, it uses
+  the 60 most recent real ones, so the evaluated window can span more
+  than 60 minutes. AWS does not document the exact range for a 60 s
+  period.
+- When fewer than 60 real datapoints exist, the missing ones are
+  treated as missing and the alarm decides on the rest. With
+  `missing`, nine failed samples among few present ones can still
+  cause ALARM ("premature" ALARM in the AWS documentation).
+- The burn rate in a message is computed only when the event lists
+  exactly 60 datapoints (§13.4). Otherwise the message gives the counts
+  and says that no rate was computed.
+
+In the evidence, data is missing only before 11/17 03:43 JST and no
+crossing is near it, so the backtest result is unaffected. The
+difference matters after future probe gaps. The integration test in §13.6
+checks CloudWatch's behavior with a gap.
+
+### 13.3 Path and independence from EC2
+
+```text
+EventBridge rate(1 minute) → Lambda gmsv5-availability (probe) → CloudWatch HTTPUp
+CloudWatch alarm (native evaluation)
+  → EventBridge rule gmsv5-availability-burn-rate (this alarm's ARN and name only)
+  → Lambda gmsv5-availability → burn_rate.py → notify()
+  → Discord CloudFront distribution (discord-alert-egress) → discord.com
+```
+
+No EC2, Nginx, Grafana or Prometheus is in the path. No new Lambda, SNS
+topic, table or IAM permission for the execution role. The only new
+resource-based permission lets this rule invoke the function.
+
+The alarm has no actions. CloudWatch sends state-change events to
+EventBridge whether or not an alarm has actions, so delivery is gated by
+the rule state and a Lambda variable (§13.5), not by
+`actions_enabled`.
+
+**Shared fate:** the same function publishes `HTTPUp` and sends the
+messages. If the function is broken or cannot reach Discord, the probe
+and the alarm notification fail together. A meta-alarm on the function's
+errors through another path is not part of P2.
+
+### 13.4 State handling and delivery
+
+Records: one row, `instance_id = burnrate#gmsv5-availability-burn-rate-fast`,
+`event_time = ~STATE`. It is separate from EC2, `http#`, `deployment#`
+and `spot#` rows and has no TTL. Writes happen only on alarm state
+changes: 3 updates per delivered notification. None happen per minute.
+
+| Attribute | Meaning |
+|---|---|
+| `alarm_state`, `state_at`, `previous_state`, `event_id`, `reason_kind` | The newest accepted state change. `state_at` is `detail.state.timestamp` in UTC with ms |
+| `observed_failed`, `observed_listed` | Counted from `reasonData.recentDatapoints` (values below `threshold`). Absent when the event has no valid list |
+| `notified_state`, `notified_at` | The last message actually delivered, and the state it was for |
+| `lease_at`, `lease_until` | A send in progress (90 s lease, equal to the Lambda timeout) |
+
+Rules:
+
+1. An event is accepted only if its `state_at` is newer than the stored
+   one (conditional update). Duplicates and older events never
+   overwrite a newer state.
+2. Every invocation then decides from the row, not from its event, what
+   the **current** state is still owed:
+
+   | Current state | Last delivered | Message |
+   |---|---|---|
+   | ALARM | not ALARM | `[HIGH] AVAILABILITY BURN RATE ALARM` |
+   | OK | ALARM | `[HIGH] BURN RATE NORMALIZED` |
+   | OK | INSUFFICIENT_DATA | `[INFO] BURN RATE DATA RESTORED` |
+   | OK | nothing or OK | none (includes the first INSUFFICIENT_DATA → OK after creation) |
+   | INSUFFICIENT_DATA, reason `Unchecked: ...` | any | none (created or reset, not a data gap) |
+   | INSUFFICIENT_DATA | not INSUFFICIENT_DATA | `[WARN] BURN RATE DATA INSUFFICIENT` |
+
+3. Send: claim the lease (condition: still the current state, not yet
+   delivered, no live lease) → `notify()` → record `notified_*` and drop
+   the lease. Only a successful `notify()` is recorded.
+4. If `notify()` fails, the lease is released and the error is raised.
+   Lambda's asynchronous retry (default: 2 retries, about 1 and 2
+   minutes later) redelivers the event, and rule 2 sends again.
+5. An invocation that finds a live lease raises `NotificationInFlight`
+   and is retried later. A sender that finds the state changed during its
+   send re-checks and sends what the new state is owed. Then an ALARM
+   in flight cannot hide the following OK.
+
+Messages contain the target, SLO, the configured condition, the observed
+counts when the event has them, the transition and the alarm state
+timestamp. The configured threshold is never shown as a measurement.
+NORMALIZED and DATA RESTORED say that they do not confirm the site is
+up. INSUFFICIENT_DATA says it is a monitoring data problem. `[HIGH]` is
+a message label. It does not set a Discord notification priority.
+
+**Residual cases (at-least-once, not exactly-once):**
+
+| Case | Result |
+|---|---|
+| `notify()` succeeded, then recording failed or the function timed out | Retry sends the message again (duplicate) |
+| The relay timed out on the client but Discord received the message | Duplicate on retry |
+| All three attempts fail (Discord, CloudFront or SSM unavailable for about 3 minutes) | Message lost. Log line `{"burn_rate": "notify_failed", ...}`. No DLQ |
+| ALARM delivery failed on all attempts and the alarm is already OK again | Neither ALARM nor NORMALIZED is sent. The episode is only in the CloudWatch alarm history |
+| Event older than 6 hours (Lambda maximum event age) | Dropped by Lambda |
+
+### 13.5 Rollout gate
+
+The variable `burn_rate_alarm_rollout` in `variables.tf` sets both gates:
+
+| Value | EventBridge rule | `BURN_RATE_DELIVERY` | Effect |
+|---|---|---|---|
+| `off` (default) | `DISABLED` | `disabled` | Alarm evaluates. The Lambda is not invoked |
+| `shadow` | `ENABLED` | `disabled` | The Lambda records state and logs `{"burn_rate": "shadow", "would_send": ...}`. No Discord message |
+| `live` | `ENABLED` | `enabled` | Discord messages |
+
+Change the default in `variables.tf` in a reviewed commit for each
+stage. `terraform.tfvars` is not in Git and `-var` is not kept, so either
+would make the next plan revert the stage. The Lambda sends only when
+the variable is exactly `enabled`.
+
+Changing stages:
+
+- `off` → `shadow` changes only the rule.
+- `shadow` → `live` changes only the Lambda environment.
+- Moving to `live` during an ALARM sends nothing for that episode,
+  because nothing was delivered for it. The next transition is handled
+  normally.
+
+**Alarm state check around the `live` switch.** Run immediately before
+the apply and again immediately after it:
+
+```bash
+aws cloudwatch describe-alarms --profile gms-admin --region ap-northeast-1 \
+  --alarm-names gmsv5-availability-burn-rate-fast \
+  --query 'MetricAlarms[0].{State:StateValue,Updated:StateUpdatedTimestamp,Reason:StateReason}'
+```
+
+- **Before:** apply only if `State` is `OK`. If it is `ALARM` or
+  `INSUFFICIENT_DATA`, postpone the switch as a rule until it has been
+  `OK` again, and investigate the cause. An episode that is already
+  running when `live` starts is never announced, and its OK is not
+  announced either.
+- **After:** confirm that `State` is still `OK` and `Updated` has not
+  changed. If the state changed during the apply, record it. Read the
+  Lambda log for a `{"burn_rate": ...}` line at that time and report it
+  with the switch. If the state is `ALARM` and no message arrived, the
+  episode was not announced (see above). Do not use `set-alarm-state` to
+  replay it.
+
+**First apply (stage `off`).** Expected plan: 4 to add
+(`aws_cloudwatch_metric_alarm.burn_rate_fast`,
+`aws_cloudwatch_event_rule.burn_rate`,
+`aws_cloudwatch_event_target.burn_rate`,
+`aws_lambda_permission.burn_rate`). The plan also has 1 to change:
+`aws_lambda_function.availability`, with new code and the variables
+`BURN_RATE_ALARM_NAME`, `BURN_RATE_ALARM_ARN` and `BURN_RATE_DELIVERY`.
+Nothing is destroyed or replaced. Do not apply a plan that touches the
+table, IAM role policies, other rules or the Discord distribution.
+
+### 13.6 Integration test (isolated, no production outage)
+
+Local tests prove the message and state logic, not CloudWatch's
+evaluation. Run this once before `live`, with Product Owner approval. It
+uses a separate namespace and temporary alarms, so it changes no
+production resource. Its events match no rule, so nothing reaches the
+Lambda or Discord.
+
+1. Create one temporary alarm per case, identical to production except
+   namespace `GMSv5/BurnRateTest` and `Target=<case>` (`put-metric-alarm`
+   with the values in §13.1).
+2. Publish 60 one-minute samples per case with timestamps in the last
+   hour (`put-metric-data`, value 0 or 1, `Unit=Count`). Cases:
+   - 8 failures: stays OK.
+   - 9 failures: ALARM.
+   - 2 consecutive failures: OK.
+   - 9 failures with 10 samples missing: record what happens.
+   If CloudWatch does not evaluate backdated samples, publish in real
+   time over one hour instead.
+3. After 3 minutes, read `describe-alarms` and
+   `describe-alarm-history --history-item-type StateUpdate`. Record each
+   state and the `reasonData`. Check whether `recentDatapoints` lists all
+   60 values. §13.4 assumes nothing about it, but this decides whether
+   messages can show a burn rate.
+4. Delete the temporary alarms (`delete-alarms`). The test metric ages
+   out. Expected cost: a few cents (prorated alarm and metric hours).
+
+The Lambda path is tested in `shadow`. While the production alarm is OK,
+`aws cloudwatch set-alarm-state --alarm-name gmsv5-availability-burn-rate-fast
+--state-value ALARM --state-reason "Operator test"` emits a real
+state-change event. The next evaluation returns the alarm to OK within
+about a minute. Expected logs: `accepted` plus `shadow` with
+`would_send: alarm`, then `accepted` with no send. In `live` the same
+command sends a real ALARM and NORMALIZED to Discord, so announce it
+first. It needs separate approval.
+
+### 13.7 Checks after apply (read only)
+
+```bash
+aws cloudwatch describe-alarms --profile gms-admin --region ap-northeast-1 \
+  --alarm-names gmsv5-availability-burn-rate-fast \
+  --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason,M:DatapointsToAlarm,N:EvaluationPeriods,Missing:TreatMissingData,Actions:AlarmActions}'
+aws events describe-rule --profile gms-admin --region ap-northeast-1 \
+  --name gmsv5-availability-burn-rate --query '{State:State,Pattern:EventPattern}'
+aws events list-targets-by-rule --profile gms-admin --region ap-northeast-1 \
+  --rule gmsv5-availability-burn-rate --query 'Targets[].Arn'
+aws lambda get-function-configuration --profile gms-admin --region ap-northeast-1 \
+  --function-name gmsv5-availability \
+  --query '{Sha:CodeSha256,Delivery:Environment.Variables.BURN_RATE_DELIVERY}'
+```
+
+Expected after the first apply:
+
+- The alarm is `OK` once it has evaluated. It is `ALARM` only if 9 of
+  the last 60 samples really failed.
+- The rule is `DISABLED`, and its target is the function.
+- `BURN_RATE_DELIVERY` is `disabled`.
+- The existing checks still pass: HTTP probe, `HTTPUp` = 1 and no new
+  Lambda errors. HTTP, EC2, Spot and deployment notifications behave as
+  before.
+
+Do not print the ARN-bearing outputs into documents. They contain the
+account ID.
+
+### 13.8 Rollback
+
+- **Stop messages (first choice):** set `burn_rate_alarm_rollout` to
+  `off` and apply. Plan: 1 change (the rule), or 2 when coming from
+  `live` (rule and Lambda environment). In an emergency,
+  `aws events disable-rule --name gmsv5-availability-burn-rate` stops
+  invocations immediately. Then make the same change in Terraform the
+  same day so that the plan shows no changes.
+- **Full rollback:** revert the commit and apply. Expected plan: the
+  4 resources of §13.5 destroyed, and the Lambda function changed back.
+  Nothing else.
+- **Data:** leave the `burnrate#` row. The previous code never reads it.
+
+### 13.9 Cost
+
+| Item | Incremental cost |
+|---|---|
+| One standard-resolution metric alarm | USD 0.10 per month at list price, or none within the CloudWatch free tier of 10 alarm metrics. No other alarm existed in the read-only check before P2. Confirm on the CloudWatch pricing page for the region |
+| `HTTPUp` metric | None. It already exists |
+| EventBridge | None for AWS service events (CloudWatch alarm state changes) delivered to rules |
+| Lambda | A few invocations per state change. The backtest had 4 episodes in 10 days, so a few dozen per month. Negligible, within the free tier |
+| DynamoDB (on-demand) | About 3 writes and 3–5 reads per notification. Negligible |
+| CloudWatch Logs | A few lines per state change. Negligible |
+| Integration test (§13.6) | A few cents, once |
+
+### 13.10 Limitations
+
+- CloudWatch's evaluation with missing data differs from the backtest
+  (§13.2). Integration test pending.
+- Shared fate of probe and notifier (§13.3).
+- Delivery is at least once with the residual cases in §13.4.
+- NORMALIZED can lag the real recovery by up to about an hour (§13.1).
+- The alarm sees only the external ingress probe (HTTP 200 on `/`), not
+  translation API success. P3 covers translation metrics separately.
