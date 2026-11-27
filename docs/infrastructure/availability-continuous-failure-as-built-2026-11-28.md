@@ -1,12 +1,14 @@
 # GMS v5 — Continuous Failure Alarm (6 of 6) As-Built (2026-11-28)
 
-- **Evidence date:** 2026-11-28 JST. The integration test ran 02:01–02:54 JST (2026-11-27 17:01–17:54Z).
+- **Evidence date:** 2026-11-28 JST. The integration test ran 02:01–02:54 JST (2026-11-27 17:01–17:54Z). Applied in stage `off` 03:29:08–03:29:22 JST (2026-11-27 18:29:08–18:29:22Z), §8.
 - **Owner:** Infrastructure / SRE
 - **Scope:** `infra/terraform/availability/`. One CloudWatch alarm, one EventBridge rule, the existing Lambda, table and Discord egress. No new Lambda, SNS topic, table, EC2 or IAM permission.
 - **Current status:**
-  - **Implemented and tested locally. Not applied.**
+  - **Applied in stage `off` (§8).** Both alarms evaluate; both rules are
+    `DISABLED` and both delivery variables `disabled`, so nothing is
+    sent.
   - CloudWatch evaluation measured in an isolated test.
-  - The missing-data choice (§4) awaits the Product Owner's final decision.
+  - Missing-data choice confirmed by the Product Owner (§4).
   - `shadow` and `live` not started.
 - **Design and operation:** [Availability Runbook §14](./availability-external-runbook.md#14-continuous-failure-alarm-6-of-6)
 - **Related:** [Burn Rate Alarm As-Built](./availability-burn-rate-as-built-2026-11-27.md)
@@ -141,16 +143,27 @@ existing metrics.
 - **Not `notBreaching`:** a stopped probe turns ALARM into OK, which
   would send NORMALIZED.
 - **`missing`:** OK requires a real passed check. A stopped probe gives
-  INSUFFICIENT_DATA, which sends DATA INSUFFICIENT, about 12 minutes
-  later.
+  INSUFFICIENT_DATA, which sends DATA INSUFFICIENT. In this test that
+  came 11.7 minutes after the last datapoint. This is an observation from
+  one test, not a guaranteed time.
 - **Cost of the choice:** not strictly 6 wall-clock minutes. The 6 most
   recent real datapoints within about 12 minutes are evaluated, and
   missing minutes are skipped. Messages say so.
 
 The strict variants and reliable detection of late data cannot both be
-had with the options available here. The final decision rests with the
-Product Owner. Switching to `notBreaching` is a one-line change in
-`continuous_failure.tf` and the message text.
+had with the options available here.
+
+**Final decision (Product Owner, 2026-11-28).** Sliding window with
+`missing`. `FILL`, the wall clock window and `notBreaching` are not
+used. Reliable detection of long outages takes priority over strict
+6 wall-clock minutes. Evaluation across a missing minute is accepted as
+known behavior, and the residual risks in §10 are accepted.
+
+The "about 12 minutes" before DATA INSUFFICIENT is the integration test
+observation (11.7 minutes), not a guaranteed or production-measured
+time. The applied message text still says "for about 12 minutes" as a
+plain statement. Rewording it needs a code change and a new artifact, so
+it was not done in this apply (Runbook §14.4).
 
 ## 5. Message samples (local test)
 
@@ -228,7 +241,7 @@ CloudWatch has had no HTTPUp datapoints for about 12 minutes. This is a monitori
 
 ## 7. Terraform plan
 
-Production configuration, read only (2026-11-28). Not applied.
+Production configuration, read only (2026-11-28). This plan was applied in §8.
 
 - **4 to add, 1 to change, 0 to destroy.**
 - Added:
@@ -247,7 +260,50 @@ Production configuration, read only (2026-11-28). Not applied.
 - No-op: IAM role policy, burn rate alarm, rule, target and permission,
   HTTP probe rule, table.
 
-## 8. Verification status
+## 8. Apply (stage `off`, 2026-11-28)
+
+Approved by the Product Owner on 2026-11-28. Production configuration,
+inspected by the Operator.
+
+**Before apply.**
+
+- HEAD `a9e88de` and a clean working tree.
+- SSO role `AdministratorAccess` (profile `gms-admin`), `ap-northeast-1`,
+  workspace `default`.
+- The saved plan was identical to a fresh plan: 4 to add, 1 to change,
+  0 to destroy.
+- Artifact SHA-256 `rwQ4c1wNkqiEOJzPzHsjSSHLBlhq8Y8Irkh/TEusxlk=`; its 5
+  files are byte-identical to the commit.
+- In the plan, both rules were `DISABLED` and both deliveries `disabled`.
+
+**Apply.** The saved plan was applied at 03:29:08–03:29:22 JST: 4 added,
+1 changed, 0 destroyed. The Lambda update took 12 s.
+
+**After apply.** Production configuration was captured immediately before
+and after the apply and compared. The runtime checks ran at 03:35:55
+JST.
+
+| Check | Result |
+|---|---|
+| Lambda | `CodeSha256` `ziom…` → `rwQ4c1wNkqiEOJzPzHsjSSHLBlhq8Y8Irkh/TEusxlk=`; `Successful` / `Active`; runtime, 90 s timeout, 128 MB, role and handler unchanged |
+| Environment | 13 variables. The 10 existing ones identical by value (hash comparison). Added: `CONTINUOUS_FAILURE_ALARM_NAME`, `CONTINUOUS_FAILURE_ALARM_ARN` (equal to the created alarm's real ARN) and `CONTINUOUS_FAILURE_DELIVERY=disabled`. `BURN_RATE_DELIVERY=disabled` |
+| 6/6 alarm | As configured: `GMS/Availability` `HTTPUp` `Target=sunlightjetrans.com`, `Minimum`, 60 s, 6 of 6, `< 1`, `missing`; no actions, unit, metric math or evaluation window. `INSUFFICIENT_DATA` at creation (03:29:10) → `OK` at 03:29:41 JST. No other transition by 03:35 |
+| 9/60 alarm | Configuration identical; `OK` since 2026-11-27 21:42 JST |
+| Rules and targets | `gmsv5-availability-burn-rate` `DISABLED`, unchanged. `gmsv5-availability-continuous-failure` `DISABLED`; its pattern matches only the 6/6 alarm's name and ARN; its one target is the function. HTTP probe rule `ENABLED`, `rate(1 minute)`, unchanged |
+| Lambda permissions | 6: the existing 5 unchanged, plus `AllowContinuousFailureAlarmEvents` with the 6/6 rule as source |
+| IAM | Inline policy, policy names and attached policies identical |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 03:27–03:34 JST (8 minutes across the apply) |
+| Lambda metrics (03:30–03:35 JST) | 5 invocations, 0 errors, 0 throttles |
+| Lambda log | 22 lines: 0 error or warning lines, 0 burn rate or continuous failure lines (expected in `off`). Max memory 95 MB of 128. Max duration 3.6 s. One cold start, init 318 ms |
+| DynamoDB | HTTP row `up`, 0 failures, last slot 03:35 JST; no `burnrate#` or `contfail#` row |
+| Readiness | HTTP 200 in 0.54 s, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+The check output's HTTPUp heading still says "since 16:36Z", left over
+from the previous script. The queried range was 18:27Z onward, as its
+timestamps show.
+
+## 9. Verification status
 
 | Item | Status |
 |---|---|
@@ -255,10 +311,10 @@ Production configuration, read only (2026-11-28). Not applied.
 | Profiles, separate rows, ledgers, leases, delivery modes, name/ARN pairing | Local test |
 | Parsing of real events, including metric math | Local test with captured events |
 | 9-of-60 messages and state handling unchanged | Local test |
-| Production configuration | Pending: apply in `off` |
+| Production configuration | Applied in `off` and checked (§8) |
 | Delivery of a real event to the Lambda, Discord delivery | Pending: `shadow`, `live` |
 
-## 9. Residual risks
+## 10. Residual risks
 
 - Not strictly 6 wall-clock minutes (§4).
 - The about-12-minute evaluation range is an estimate from one test.
@@ -268,10 +324,12 @@ Production configuration, read only (2026-11-28). Not applied.
 - Shared fate with the probe, at-least-once delivery, no DLQ, and worker
   slots shared with the burn rate alarm (Runbook §13.3, §13.4, §13.11).
 
-## 10. Evidence handling
+## 11. Evidence handling
 
 This document contains no AWS account ID, credential, session token,
 Terraform State or Discord token. The integration test data, publish
 log, run log, alarm configuration and history, captured events and the
 test script are kept outside the repository with SHA-256 checksums,
-because they contain ARNs with the account ID.
+because they contain ARNs with the account ID. The same applies to the
+before and after snapshots of the 2026-11-28 apply, its apply log
+(account ID masked), post-apply check output and scripts.

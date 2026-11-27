@@ -1213,9 +1213,11 @@ sent anyway. The log line is `Burn rate context <part> unavailable: <code>`.
 
 ## 14. Continuous failure alarm (6 of 6)
 
-**Status (2026-11-28): implemented and tested locally; CloudWatch's
-evaluation measured in an isolated integration test. Not applied.** The
-missing-data choice (§14.2) awaits the Product Owner's final decision.
+**Status (2026-11-28): applied in stage `off` at 03:29 JST.** The alarm
+evaluates. Its rule is `DISABLED` and `CONTINUOUS_FAILURE_DELIVERY` is
+`disabled`, so nothing is sent. CloudWatch's evaluation was measured in
+an isolated integration test. The missing-data choice (§14.2) was
+confirmed by the Product Owner.
 Record applies in a dated As-Built
 ([Continuous Failure As-Built](./availability-continuous-failure-as-built-2026-11-28.md)).
 
@@ -1291,9 +1293,10 @@ variants:
   documented by AWS.
 - `missing` (not `notBreaching`): leaving ALARM needs a **real passed
   check** among the 6 most recent datapoints, so a stopped probe never
-  produces NORMALIZED. It goes to INSUFFICIENT_DATA after about 12
-  minutes, which also flags a stopped probe much earlier than §13
-  (about 66 minutes). With `notBreaching`, the same stop produced OK,
+  produces NORMALIZED. It goes to INSUFFICIENT_DATA instead. In the
+  isolated test that took 11.7 minutes after the last datapoint (an
+  observation from one test, not a guaranteed or measured production
+  value), much earlier than §13 (about 66 minutes, also observed). With `notBreaching`, the same stop produced OK,
   stated as "missing datapoint was treated as [NonBreaching]".
 
 ### 14.3 Configuration and path
@@ -1330,9 +1333,13 @@ in a row (the most recent ones; missing minutes are skipped)`. `Now`,
 - **NORMALIZED** says that a passed check is among the 6 most recent
   datapoints, that this is not the confirmed recovery time and does not
   confirm the site is up.
-- **DATA INSUFFICIENT** says that there was no HTTPUp for about 12
-  minutes, and that this is a monitoring data problem, not downtime or
-  recovery.
+- **DATA INSUFFICIENT** says that there was no HTTPUp "for about 12
+  minutes", and that this is a monitoring data problem, not downtime or
+  recovery. The figure is the integration test observation, not a
+  measurement of the actual gap. The message does not measure the gap;
+  `Now` (last check time) and `Last 60` (missing count) show the actual
+  data. A later code change should word it as "about 12 minutes in the
+  integration test" or drop the number (not in the applied build).
 
 Samples:
 [As-Built §5](./availability-continuous-failure-as-built-2026-11-28.md#5-message-samples-local-test).
@@ -1399,7 +1406,8 @@ The same as §13.7, for this alarm and rule:
 - The about-12-minute range is an estimate from one test.
 - Late data delays ALARM by about the delay (3–5 minutes at 130–250 s).
 - A stopped probe gives DATA INSUFFICIENT, from this alarm after about 12
-  minutes and from §13 after about 66 minutes. A broken function sends
+  minutes and from §13 after about 66 minutes. Both are observations in
+  isolated tests, not guaranteed times. A broken function sends
   nothing: shared fate as in §13.3. There is no meta-alarm.
 - NORMALIZED needs only one passed check. A flapping site can give
   several ALARM and NORMALIZED pairs. This was not seen in the
