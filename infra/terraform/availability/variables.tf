@@ -64,7 +64,7 @@ variable "observability_role_name" {
 #   live   - rule ENABLED; Lambda sends Discord notifications.
 variable "burn_rate_alarm_rollout" {
   type    = string
-  default = "shadow" # 2026-11-28 production SHADOW stage (As-Built: P2 rollout)
+  default = "live" # 2026-11-28 production LIVE stage (As-Built: P2 rollout)
   validation {
     condition     = contains(["off", "shadow", "live"], var.burn_rate_alarm_rollout)
     error_message = "Use off, shadow or live."
@@ -75,7 +75,7 @@ variable "burn_rate_alarm_rollout" {
 # the same meaning as burn_rate_alarm_rollout. The two are independent.
 variable "continuous_failure_alarm_rollout" {
   type    = string
-  default = "shadow" # 2026-11-28 production SHADOW stage (As-Built: P2 rollout)
+  default = "live" # 2026-11-28 production LIVE stage (As-Built: P2 rollout)
   validation {
     condition     = contains(["off", "shadow", "live"], var.continuous_failure_alarm_rollout)
     error_message = "Use off, shadow or live."

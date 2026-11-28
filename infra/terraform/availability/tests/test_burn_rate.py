@@ -753,7 +753,7 @@ class TerraformConsistencyTests(unittest.TestCase):
         variables = tf("variables.tf")
         rollout = re.search(r'variable "burn_rate_alarm_rollout" \{(.*?)\n\}', variables, re.S).group(1)
         # The committed stage; each stage change is its own reviewed commit.
-        self.assertIn('default = "shadow"', rollout)
+        self.assertIn('default = "live"', rollout)
 
     def test_lease_covers_lambda_timeout(self):
         # A lease shorter than the timeout lets a retry take over from a

@@ -347,7 +347,7 @@ class TerraformConsistencyTests(unittest.TestCase):
         rollout = re.search(r'variable "continuous_failure_alarm_rollout" \{(.*?)\n\}',
                             tf("variables.tf"), re.S).group(1)
         # The committed stage; each stage change is its own reviewed commit.
-        self.assertIn('default = "shadow"', rollout)
+        self.assertIn('default = "live"', rollout)
 
     def test_no_iam_change_and_burn_rate_resources_untouched(self):
         self.assertNotIn("aws_iam", tf("continuous_failure.tf"))

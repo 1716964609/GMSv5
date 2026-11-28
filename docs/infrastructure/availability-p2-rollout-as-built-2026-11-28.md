@@ -10,8 +10,8 @@
   - **Stage 3 done:** planned stop at 18:29:33 JST, manual start at
     18:41:34. Both alarms went OK → ALARM → OK in `shadow` and were
     back to OK by 19:33:53 (§5).
-  - Stages 4–5 (`live`, completion) not started; each needs its own
-    approval.
+  - **Stage 4 (`live`): prepared and planned, not applied (§6).**
+  - Stage 5 (completion) not started; it needs its own approval.
 - **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
 - **Related:**
   - [Burn Rate As-Built](./availability-burn-rate-as-built-2026-11-27.md)
@@ -253,11 +253,42 @@ column are its 15-second polls; the other times are from AWS records.
   `stopped` event (18:29:44) to the HTTP 200 observation (18:41:49).
   The service was unreachable from about T0 (18:29:33).
 
-**Confirmed by the Product Owner (pending at the time of writing):**
+**Confirmed by the Product Owner on the device (2026-11-28).**
 
-- the real LOW messages: HTTP DOWN/RECOVERED and EC2 RECOVERED;
-- UptimeRobot DOWN/UP;
-- no HIGH push.
+| Item | Result |
+|---|---|
+| HTTP DOWN / RECOVERED and EC2 RECOVERED in Discord | PASS |
+| UptimeRobot DOWN / UP in Discord | PASS |
+| UptimeRobot LOW identification string | PASS |
+| No real HIGH delivery | PASS |
+| No iPhone push during the test | PASS |
+
+Additional observation by the Product Owner: Host Telemetry returned to
+ACTIVE after the restart without manual action.
+
+**Stage 3 result: PASS** (Product Owner, 2026-11-28).
+
+| Metric | Value |
+|---|---|
+| 6/6 ALARM | 18:35:41.7 JST |
+| 9/60 ALARM | 18:38:53.0 JST |
+| EC2 start operation | 18:41:34 JST |
+| Readiness | 18:42:03 JST |
+| 6/6 NORMALIZED | 18:42:41.7 JST |
+| 9/60 NORMALIZED | 19:33:53.0 JST |
+| Error budget | 12 minutes consumed by the test; 33.8 left |
+| Availability | 99.34 % |
+| Coverage | 100 % |
+| Lambda | 0 errors, 0 throttles |
+| Shadow events | 4, no duplicate |
+
+**Residual risks carried forward.**
+
+- The Lambda's maximum memory reached 112 MB of 128 MB. It is not
+  changed now and stays under observation.
+- The Spot stop reason is updated asynchronously, so a user stop can be
+  recorded as `marked-for-stop`. This is a known limitation.
+- There is no planned stop test after `live`.
 
 **Evidence.** Kept outside the repository with checksums:
 
@@ -266,3 +297,41 @@ column are its 15-second polls; the other times are from AWS records.
 
 A scan found no user ID in it. SetAlarmState was not used and there was
 no second stop.
+
+## 6. Stage 4 — `live` (prepared, not applied)
+
+**Checks before the change (read only, 19:47 JST).**
+
+- Both alarms OK; both rules `ENABLED`; both deliveries `disabled`.
+- Readiness `ready`; Lambda `AY3K…`.
+- The user ID is set, valid and equal to `terraform.tfvars` (value not
+  shown).
+- Shadow and live ledgers are independent: both rows have
+  `shadow_notified_state` OK and no `notified_*` or lease.
+- Availability 99.34 %, 33.8 minutes of budget left, coverage 100 %.
+  The last 60 minutes had no failure.
+- SSO valid until 23:19 JST.
+
+**Change (repository check, local test).**
+
+- `variables.tf`: both rollout defaults `shadow` → `live`. In `live`:
+  - the rules stay `ENABLED`;
+  - `BURN_RATE_DELIVERY` and `CONTINUOUS_FAILURE_DELIVERY` become
+    `enabled`;
+  - the precondition requires the user ID, which is set.
+- The two stage tests now expect `live`. The mutation P13 was retargeted
+  to `live` → `shadow`.
+
+**What changes for messages.** The live ledger is empty and both alarms
+are OK, so nothing is sent at the switch. The next state change is
+handled as live: ALARM and DATA INSUFFICIENT as HIGH with the mention,
+NORMALIZED and DATA RESTORED as LOW. The shadow ledger stays as
+written; live never reads it (Runbook §13.5).
+
+**Tests.**
+
+- 308 tests passed, three consecutive runs.
+- Mutation runs on copies, each first checked to pass unmutated:
+  78 / 78 detected.
+
+**Plan:** recorded below after it is generated from the commit.

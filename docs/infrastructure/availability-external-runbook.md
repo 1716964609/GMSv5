@@ -1551,7 +1551,13 @@ stage at a time:
 5. As-Built, Push and Merge.
 
 No stage is skipped to finish today. Every safety condition still stops
-the sequence. Record: [P2 Production Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
+the sequence. Progress on 2026-11-28:
+
+- `shadow` applied at 18:02.
+- Planned stop at 18:29:33, start at 18:41:34.
+- Both alarms OK again at 19:33:53.
+- The stop test passed.
+- `live` was prepared but not yet applied. Record: [P2 Production Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
 
 ### 16.1 Accepted risks (not resolved)
 
