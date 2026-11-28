@@ -91,6 +91,20 @@ data "aws_iam_policy_document" "lambda_runtime" {
       values   = ["GMS/Availability"]
     }
   }
+  # Burn rate notifications read the last 60 minutes of HTTPUp (read only).
+  # GetMetricData has no resource ARN for classic metrics (only the optional
+  # "dataset" type) and cloudwatch:namespace does not apply to it, so the
+  # Resource must be "*"; the metric is fixed in burn_rate_context.py.
+  statement {
+    sid       = "ReadBurnRateContextMetric"
+    actions   = ["cloudwatch:GetMetricData"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+  }
   # Only the one manually created SecureString is readable.
   statement {
     sid     = "ReadRelaySecret"
@@ -151,6 +165,28 @@ resource "aws_lambda_function" "availability" {
       DISCORD_TOKEN_PARAMETER = var.discord_token_parameter
       # Spot interruption reason evidence (lambda/spot_status.py); fails open.
       SPOT_STATUS_COLLECTION = "enabled"
+      # Burn rate alarm notifications (burn_rate.tf, lambda/burn_rate.py).
+      BURN_RATE_ALARM_NAME = aws_cloudwatch_metric_alarm.burn_rate_fast.alarm_name
+      BURN_RATE_ALARM_ARN  = aws_cloudwatch_metric_alarm.burn_rate_fast.arn
+      BURN_RATE_DELIVERY   = var.burn_rate_alarm_rollout == "live" ? "enabled" : "disabled"
+
+      # Continuous failure alarm notifications (continuous_failure.tf). Name and
+      # ARN are built from known values, so the plan shows the other variables
+      # unchanged; a test checks the ARN format against the alarm.
+      CONTINUOUS_FAILURE_ALARM_NAME = local.continuous_failure_alarm_name
+      CONTINUOUS_FAILURE_ALARM_ARN  = local.continuous_failure_alarm_arn
+      CONTINUOUS_FAILURE_DELIVERY   = var.continuous_failure_alarm_rollout == "live" ? "enabled" : "disabled"
+
+      # Discord user mentioned on HIGH messages (variables.tf; sensitive, not in Git).
+      DISCORD_ALERT_USER_ID = var.discord_alert_user_id
+    }
+  }
+  lifecycle {
+    precondition {
+      condition = var.discord_alert_user_id != "" || (
+        var.burn_rate_alarm_rollout != "live" && var.continuous_failure_alarm_rollout != "live"
+      )
+      error_message = "Set discord_alert_user_id in terraform.tfvars (not in Git) before any alarm rollout is live."
     }
   }
   depends_on = [aws_iam_role_policy.lambda_runtime, aws_cloudwatch_log_group.lambda]

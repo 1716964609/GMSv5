@@ -1,4 +1,7 @@
 """Spot status collector tests. No AWS calls: EC2 and DynamoDB are fakes."""
+import os as _os, sys as _sys  # noqa: E401
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import no_network  # noqa: E402,F401  Blocks real network access (no AWS calls).
 import sys
 import threading
 import unittest

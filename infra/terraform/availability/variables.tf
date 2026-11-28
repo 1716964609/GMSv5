@@ -56,3 +56,43 @@ variable "observability_role_name" {
   type    = string
   default = "gmsv5-observability-role"
 }
+
+# Rollout gate. Do not rely on alarm actions: CloudWatch emits state-change
+# events to EventBridge whether or not the alarm has actions.
+#   off    - alarm evaluates; EventBridge rule DISABLED; Lambda not invoked.
+#   shadow - rule ENABLED; Lambda records state and logs, sends nothing.
+#   live   - rule ENABLED; Lambda sends Discord notifications.
+variable "burn_rate_alarm_rollout" {
+  type    = string
+  default = "live" # 2026-11-28 production LIVE stage (As-Built: P2 rollout)
+  validation {
+    condition     = contains(["off", "shadow", "live"], var.burn_rate_alarm_rollout)
+    error_message = "Use off, shadow or live."
+  }
+}
+
+# Rollout gate of the continuous failure alarm (continuous_failure.tf), with
+# the same meaning as burn_rate_alarm_rollout. The two are independent.
+variable "continuous_failure_alarm_rollout" {
+  type    = string
+  default = "live" # 2026-11-28 production LIVE stage (As-Built: P2 rollout)
+  validation {
+    condition     = contains(["off", "shadow", "live"], var.continuous_failure_alarm_rollout)
+    error_message = "Use off, shadow or live."
+  }
+}
+
+# Discord user mentioned on HIGH alarm messages (ALARM and DATA INSUFFICIENT
+# of both alarms). Set ONLY in terraform.tfvars, which is not in Git (*.tfvars
+# in .gitignore). Empty = no mention; the Lambda then sends HIGH messages
+# without a mention and logs a warning. A precondition on the Lambda refuses a
+# plan with an alarm rollout at "live" and no ID.
+variable "discord_alert_user_id" {
+  type      = string
+  default   = ""
+  sensitive = true
+  validation {
+    condition     = can(regex("^([0-9]{17,20})?$", var.discord_alert_user_id))
+    error_message = "Use an empty string or a 17-20 digit Discord user ID."
+  }
+}

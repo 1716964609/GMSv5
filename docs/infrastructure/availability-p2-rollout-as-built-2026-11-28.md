@@ -1,0 +1,510 @@
+# GMS v5 — P2 Production Rollout As-Built (2026-11-28)
+
+- **Evidence date:** 2026-11-28 JST
+- **Owner:** Infrastructure / SRE
+- **Scope:** the two availability alarms (burn rate 9/60, continuous failure 6/6) moving from `off` to `shadow`, the planned stop test, and `live`. Code and configuration as of `973ae68`; no new feature.
+- **Current status:**
+  - **Stage 1 done: both alarms in `shadow` since 18:02:27 JST (§3).**
+    Rules `ENABLED`, deliveries `disabled`.
+  - **Stage 2 done:** final pre-stop checks, 12 of 12 PASS (§4).
+  - **Stage 3 done:** planned stop at 18:29:33 JST, manual start at
+    18:41:34. Both alarms went OK → ALARM → OK in `shadow` and were
+    back to OK by 19:33:53 (§5).
+  - **Stage 4 done: both alarms `live` since 23:12:47 JST (§6).** Rules
+    `ENABLED`, deliveries `enabled`.
+  - **Official LIVE start: 2026-11-28 23:12:47 JST** (Product Owner).
+  - Stage 5 (completion): final record in §7. Push and PR follow;
+    Merge needs its own approval.
+- **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
+- **Related:**
+  - [Burn Rate As-Built](./availability-burn-rate-as-built-2026-11-27.md)
+  - [Continuous Failure As-Built](./availability-continuous-failure-as-built-2026-11-28.md)
+  - [Notification Priority As-Built](./availability-notification-priority-as-built-2026-11-28.md)
+
+## 1. Decision and accepted risks (Product Owner, 2026-11-28)
+
+The earlier plan to postpone the planned stop to 2026-12-01 was withdrawn.
+The whole sequence runs today:
+
+1. `shadow`.
+2. One 12-minute planned stop of the Application EC2.
+3. Both alarms back to OK.
+4. `live`.
+5. As-Built, Push and Merge.
+
+Each stage keeps its approval boundary. An unmet safety condition stops
+the sequence, and no check is skipped to finish today.
+
+- **The planned stop:** once only, with a manual start. The Observability
+  EC2 is not stopped. There is no stop test after `live`.
+- **What it verifies:** alarm evaluation and production event handling
+  are verified by the planned stop under `shadow`.
+- **Discord:** real delivery and the iPhone push are taken as verified
+  by the synthetic HIGH / LOW device test of the same day.
+- **No extra snapshot.** The existing daily DLM snapshot is used. Reason:
+  no recent data changes or new users.
+- **Spot capacity shortage:** handled manually. No automatic recovery
+  and no new feature.
+
+**Accepted risks (not resolved).**
+
+- **Error budget.** At 17:25 JST: SLO 99 % / rolling 7 days, availability
+  99.45 %, budget 100.8 minutes, 55.0 consumed, 45.8 left, coverage
+  100 %. A 12-minute stop plus 2 minutes of start would leave about
+  31.8 minutes. Natural Spot interruptions before 2026-12-01 evening can
+  take availability below 99 %. Accepted for this experimental
+  environment.
+- **Restart.** AWS does not start a user-stopped persistent Spot
+  instance, and a start can fail for lack of capacity. The recovery time
+  is not guaranteed.
+
+## 2. Pre-stop investigation (read only, 2026-11-28 17:25 JST)
+
+- **Monitoring data.** The Grafana figures were recomputed from
+  CloudWatch with the dashboard's formulas and matched exactly. The last
+  60 minutes had no failure and no missing minute.
+- **Alarms and delivery.** Both alarms OK, both rules `DISABLED`, both
+  deliveries `disabled`.
+- **Application.** Lambda `AY3KE7zQPDNa0HvEUKUgmtVyxV37bEHmKShMXqLNpv4=`.
+  Readiness `ready`.
+- **Deployments.** None in progress; the last was 2026-11-27 19:00 JST.
+- **Traffic.** About 6 requests per 5 minutes on the public CloudFront
+  distribution, roughly the probes alone. User requests in flight cannot
+  be seen directly.
+- **Application EC2:**
+  - t4g.small in 1a, persistent Spot (`stop`), stop protection off;
+  - primary ENI with the origin IPv6 (`origin-v5`, TTL 60);
+  - data on a separate EBS with a daily DLM snapshot;
+  - `gmsv5.service` starts at boot.
+- **Spot history.** 20 AWS-initiated Spot stops in the 7 days before,
+  2 of them on this day (10:17 and 10:52). Each recovered automatically
+  in 57–117 s.
+- **AWS documentation:**
+  - after a user stop the request is `disabled` and AWS does not start
+    it;
+  - a start needs capacity;
+  - the instance type cannot be changed while the instance is stopped;
+  - the primary ENI cannot be detached.
+- **Alternative recovery.** DR Runbook §4–§8; the production cutover has
+  never been run (Runbook §16.3).
+
+## 3. Stage 1 — `shadow`
+
+**Change (repository check, local test).**
+
+- `variables.tf`: both rollout defaults `off` → `shadow`, in a reviewed
+  commit as Runbook §13.5 requires. In `shadow`:
+  - the rule is `ENABLED`;
+  - `*_DELIVERY` stays `disabled`, because only `live` sets `enabled`;
+  - the precondition is satisfied, because it applies only to `live`.
+- Two tests that pinned the committed stage now expect `shadow`, and the
+  mutation P13 was retargeted to `shadow` → `live`.
+- One test was added: `ShadowStageEndToEndTests`. It drives both alarms
+  through `handler.handler` with both deliveries `disabled`. For each
+  alarm it sends ALARM, a duplicate ALARM and OK.
+
+**What runs in `shadow`, and the tests that cover it.**
+
+| Item | Covered by |
+|---|---|
+| Alarm event validation (name/ARN pair, source, state) | `ParseTests`, `RejectionTests`, `HandlerDispatchTests` |
+| Context lookups (Now, Last 60) | `ShadowContextTests`, `ShadowStageEndToEndTests` |
+| Shadow ledger | `ShadowLifecycleTests` (`shadow_notified_*`) |
+| Duplicate and stale events | `test_duplicates_and_stale_events_log_once`, concurrent mark, state change after read, end-to-end duplicates |
+| Payload with the user ID masked | `test_shadow_log_shows_priority_mention_and_masked_payload`, end-to-end |
+| HIGH / LOW priority | `test_kinds_route_to_high_or_low`, end-to-end (ALARM high with mention, NORMALIZED low) |
+| No real send | Shadow tests assert nothing sent; end-to-end asserts `urlopen` never called |
+| Live state untouched | `assert_no_live_fields`, `test_live_never_writes_the_shadow_ledger`, end-to-end (no `notified_*` or lease) |
+
+**Tests.**
+
+- 308 tests in total, all passing, three consecutive runs: the 307
+  earlier tests plus the end-to-end test. The network was blocked.
+- Mutation runs on copies, each first checked to pass unmutated:
+  78 / 78 detected.
+
+**Production state before the apply (read only, 17:43 JST).**
+
+- Availability 99.45 %, 55.0 minutes consumed, 45.8 left, coverage 100 %.
+- The last 60 minutes had no failure and no missing minute.
+- Both alarms OK; both rules `DISABLED`; both deliveries `disabled`.
+- Lambda `AY3K…`, 14 variables, user ID valid (value not shown).
+- Readiness `ready`.
+- AWS SSO credentials valid until 23:19 JST.
+
+**Plan (from `d9c5806`, read only).**
+
+- 0 to add, 2 to change, 0 to destroy: `aws_cloudwatch_event_rule.burn_rate`
+  and `aws_cloudwatch_event_rule.continuous_failure`. Only `state`
+  changes, `DISABLED` → `ENABLED`.
+- Everything else no-op: the Lambda (code, the 14 variables, both
+  deliveries), IAM, the alarms, targets, permissions, the HTTP probe, the
+  table and the relay.
+- The text plan did not contain the user ID.
+
+**Apply.** 18:02:25–18:02:27 JST: 0 added, 2 changed, 0 destroyed.
+
+**After apply** (snapshots before and after; runtime checks at 18:09:05
+JST).
+
+| Check | Result |
+|---|---|
+| Rules | Both `DISABLED` → `ENABLED`; patterns and targets unchanged; HTTP probe rule unchanged |
+| Deliveries | Both `disabled` |
+| Lambda | `CodeSha256` `AY3K…`, `LastModified`, the 14 variables (hash comparison), timeout, memory and role all unchanged. User ID present, valid and equal to `terraform.tfvars` (value not shown) |
+| Alarms | Both configurations unchanged; both `OK`; no state update since the apply |
+| IAM, permissions | Unchanged |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 18:00–18:08 JST (9 minutes across the apply) |
+| Lambda metrics (18:03–18:09 JST) | 5 invocations (probes), 0 errors, 0 throttles. Max duration 0.42 s, max memory 100 MB of 128, no cold start |
+| Lambda log | 21 lines: 0 error or warning lines, 0 burn rate, shadow or notified lines |
+| Rule invocations | `gmsv5-availability-burn-rate` and `gmsv5-availability-continuous-failure`: 0 invocations, 0 failed. Expected: no alarm state change |
+| DynamoDB | HTTP row `up`, 0 failures; no `burnrate#` or `contfail#` row |
+| Unintended Discord messages | None: no notify path ran (no HTTP failure, no alarm event) |
+| Readiness | HTTP 200, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+No natural failure occurred during the checks. The evidence (snapshots,
+apply log with the account ID masked, plan summary, check output and
+scripts, checksums) is kept outside the repository. A scan found no
+user ID in it.
+
+## 4. Stage 2 — final pre-stop checks (read only, 18:14–18:16 JST)
+
+All 12 checks passed:
+
+1. Availability 99.45 %, 55.0 minutes consumed, 45.8 left, coverage
+   100 %.
+2. The last 60 minutes had no failure and no missing minute.
+3. Both alarms OK.
+4. Both rules `ENABLED`, both deliveries `disabled`.
+5. Lambda `AY3K…`.
+6. Application and Observability EC2: running, instance, system and EBS
+   status `ok`, SSM Online.
+7. Readiness `ready`.
+8. No deployment: no SSM command in 12 hours, no open pull request, no
+   running workflow. CD is enabled, so the merge freeze holds by not
+   pushing or merging.
+9. Traffic: 6–17 CloudFront requests per 5 minutes, about the probe
+   baseline. Requests in flight cannot be seen.
+10. Latest data-volume snapshot `snap-04917fe2efa5fda6b` (04:36 JST)
+    `completed`.
+11. SSO valid until 23:19 JST.
+12. Runbook §16 reviewed. Start polling is bounded by wall-clock time.
+
+**Other conditions.**
+
+- The Spot request was `active` / `fulfilled`, with no Spot event since
+  10:52 JST.
+- The Spot price in 1a was 0.0078.
+- An immediate re-check at 18:29:22–18:29:26 JST was unchanged.
+
+## 5. Stage 3 — planned stop (2026-11-28)
+
+Approved by the Product Owner. Runbook §16.3 was used. The start was
+scripted to run once at T0+12:00, only if the instance was `stopped`,
+with a T0+15:00 wall-clock bound. A read-only watcher logged EC2, Spot,
+HTTP, readiness and alarm changes every 15 s. Times in the watcher
+column are its 15-second polls; the other times are from AWS records.
+
+| JST | T0+ | Event |
+|---|---|---|
+| 18:29:33 | 0:00 | **T0**: `stop-instances` (running → stopping) |
+| 18:29 | | First failed HTTPUp minute (probe `TimeoutError`) |
+| 18:29:44 | 0:11 | EC2 `stopped` event (event time; incident row opened) |
+| 18:30:31 | ~0:58 | Watcher: `stopped` |
+| 18:31:04 | ~1:31 | Watcher: Spot request `disabled` / `instance-stopped-by-user`. At 18:30:31 it was still `active` / `marked-for-stop` |
+| 18:35:41.7 | 6:08 | **6/6 ALARM**. Lambda accepted it at 18:35:42.0 and logged the shadow line at 18:35:42.7 |
+| 18:38:53.0 | 9:20 | **9/60 ALARM**. Accepted at 18:38:56, shadow line at 18:38:57 |
+| 18:40 | | Last failed HTTPUp minute |
+| 18:41:34 | 12:01 | `start-instances`, called once; the state was `stopped` just before |
+| 18:41:39 | 12:06 | EC2 `running` event (event time) |
+| 18:41:47 | 12:14 | `running`; SSM Online; Spot `active` / `fulfilled`. There was no capacity problem |
+| 18:41:49 | 12:16 | HTTP 200 observed by the Lambda; incident closed (`http200`, 725 s event-time downtime) |
+| 18:42:03 | 12:30 | Watcher: public HTTP 200, readiness `ready`, release `0b72c3a` |
+| 18:42:41.7 | 13:08 | **6/6 OK**; shadow line (NORMALIZED) at 18:42:42 |
+| 19:33:53.0 | 64:20 | **9/60 OK**; shadow line (NORMALIZED) |
+
+**Results** (read only, collected at 19:34–19:35 JST).
+
+| Check | Result |
+|---|---|
+| HTTPUp | 12 failed minutes, 18:29–18:40 JST; first good minute 18:41. 70 of 70 minutes present (no missing data) |
+| Alarm history vs events | 4 state updates (6/6 OK→ALARM→OK, 9/60 OK→ALARM→OK). The rules invoked the Lambda 2 + 2 times with 0 failures; 4 `accepted` lines; no duplicate or stale event |
+| Shadow lines | 4, all `"delivered": false`. ALARM ×2: `priority` high, `mention` true, `allowed_mentions` `{"users": ["USER_ID_MASKED"]}`. NORMALIZED ×2: `priority` low, `mention` false, `{"parse": []}`. In each, the payload `content` equals the mention prefix (if any) plus the message |
+| Context | All four messages had `Now` (DOWN at ALARM, UP at NORMALIZED) and the `Last 60` / `Pattern` lines. 0 "unavailable" warnings |
+| Real HIGH sends | None: 0 `notified` lines and 0 `notify_failed` |
+| DynamoDB | `contfail#` and `burnrate#` rows: state OK / previous ALARM, `shadow_notified_state` OK. **No `notified_*` and no lease** (live ledger untouched) |
+| Lambda (T0 to 19:34) | 71 invocations, 0 errors, 0 throttles. Alarm invocations 0.6–3.7 s and 93–112 MB. Max overall 14.2 s: the EC2 `running` handler, whose post-start HTTP polling is bounded below the 90 s timeout. Max memory 112 MB of 128 |
+| Log warnings | 13, all `Public HTTP probe failed: TimeoutError` during the stop: 12 scheduled probes plus 1 in the post-start polling |
+| User ID | Not in any log line or kept evidence |
+| Application | Running, readiness `ready`, public HTTP 200 since 18:42 |
+| Error budget (19:35 JST) | Availability 99.34 %, **67.0 minutes consumed (66.47 %), 33.8 left**, coverage 100 %. The test consumed 12 minutes, against 14 assumed |
+
+**Differences from the plan (recorded, not hidden).**
+
+- **Spot request status.** The Spot request became `disabled` /
+  `instance-stopped-by-user` about 30 s after `stopped`.
+- **Spot reason evidence.** The incident recorded
+  `spot_status_code` `marked-for-stop` (class `PENDING`), because its
+  reads ran before that change. The trigger was correctly `unknown`: no
+  Spot warning was seen. The user stop is therefore not identified as
+  `instance-stopped-by-user` in the incident evidence.
+- **9/60 normalization.** It came at T0+64.3 minutes, earlier than the
+  estimated T0+66–70. The estimate came from the integration test and
+  is not guaranteed.
+- **Event-time downtime.** The incident's 725 s counts from the EC2
+  `stopped` event (18:29:44) to the HTTP 200 observation (18:41:49).
+  The service was unreachable from about T0 (18:29:33).
+
+**Confirmed by the Product Owner on the device (2026-11-28).**
+
+| Item | Result |
+|---|---|
+| HTTP DOWN / RECOVERED and EC2 RECOVERED in Discord | PASS |
+| UptimeRobot DOWN / UP in Discord | PASS |
+| UptimeRobot LOW identification string | PASS |
+| No real HIGH delivery | PASS |
+| No iPhone push during the test | PASS |
+
+Additional observation by the Product Owner: Host Telemetry returned to
+ACTIVE after the restart without manual action.
+
+**Stage 3 result: PASS** (Product Owner, 2026-11-28).
+
+| Metric | Value |
+|---|---|
+| 6/6 ALARM | 18:35:41.7 JST |
+| 9/60 ALARM | 18:38:53.0 JST |
+| EC2 start operation | 18:41:34 JST |
+| Readiness | 18:42:03 JST |
+| 6/6 NORMALIZED | 18:42:41.7 JST |
+| 9/60 NORMALIZED | 19:33:53.0 JST |
+| Error budget | 12 minutes consumed by the test; 33.8 left |
+| Availability | 99.34 % |
+| Coverage | 100 % |
+| Lambda | 0 errors, 0 throttles |
+| Shadow events | 4, no duplicate |
+
+**Residual risks carried forward.**
+
+- The Lambda's maximum memory reached 112 MB of 128 MB. It is not
+  changed now and stays under observation.
+- The Spot stop reason is updated asynchronously, so a user stop can be
+  recorded as `marked-for-stop`. This is a known limitation.
+- There is no planned stop test after `live`.
+
+**Evidence.** Kept outside the repository with checksums:
+
+- pre-stop state, stop response, start log, watcher log;
+- final collection script and output, post-test state.
+
+A scan found no user ID in it. SetAlarmState was not used and there was
+no second stop.
+
+## 6. Stage 4 — `live`
+
+**Checks before the change (read only, 19:47 JST).**
+
+- Both alarms OK; both rules `ENABLED`; both deliveries `disabled`.
+- Readiness `ready`; Lambda `AY3K…`.
+- The user ID is set, valid and equal to `terraform.tfvars` (value not
+  shown).
+- Shadow and live ledgers are independent: both rows have
+  `shadow_notified_state` OK and no `notified_*` or lease.
+- Availability 99.34 %, 33.8 minutes of budget left, coverage 100 %.
+  The last 60 minutes had no failure.
+- SSO valid until 23:19 JST.
+
+**Change (repository check, local test).**
+
+- `variables.tf`: both rollout defaults `shadow` → `live`. In `live`:
+  - the rules stay `ENABLED`;
+  - `BURN_RATE_DELIVERY` and `CONTINUOUS_FAILURE_DELIVERY` become
+    `enabled`;
+  - the precondition requires the user ID, which is set.
+- The two stage tests now expect `live`. The mutation P13 was retargeted
+  to `live` → `shadow`.
+
+**What changes for messages.** The live ledger is empty and both alarms
+are OK, so nothing is sent at the switch. The next state change is
+handled as live: ALARM and DATA INSUFFICIENT as HIGH with the mention,
+NORMALIZED and DATA RESTORED as LOW. The shadow ledger stays as
+written; live never reads it (Runbook §13.5).
+
+**Tests.**
+
+- 308 tests passed, three consecutive runs.
+- Mutation runs on copies, each first checked to pass unmutated:
+  78 / 78 detected.
+
+**Plan (from `2073ad1`, read only, 2026-11-28).**
+
+- **0 to add, 1 to change, 0 to destroy:** `aws_lambda_function.availability`
+  only.
+- Only `environment` changes:
+  - `BURN_RATE_DELIVERY` `disabled` → `enabled`;
+  - `CONTINUOUS_FAILURE_DELIVERY` `disabled` → `enabled`.
+- The other 12 variables are identical, including `DISCORD_ALERT_USER_ID`,
+  which equals `terraform.tfvars` (compared without printing). There are
+  14 keys before and after.
+- `source_code_hash` is unchanged (`AY3K…`), and `last_modified` is not
+  even marked as changing.
+- No-op: IAM, both alarms, both rules (`ENABLED`), both targets, both
+  permissions, the HTTP probe rule, the table and the relay.
+- The text plan shows the environment as sensitive and does not contain
+  the ID.
+
+That plan was approved and then regenerated before the apply.
+
+**Re-check before the apply (read only, 23:11–23:12 JST).** The check
+of 19:47 was more than three hours old, so everything was read again.
+
+| Check | Result |
+|---|---|
+| SSO | Renewed; valid until 07:11 JST (2026-11-29) |
+| Repository | HEAD `c76e547`, clean |
+| Alarms | Both OK (burn rate since 19:33:53, continuous failure since 18:42:41); no state update since 19:47 |
+| Rules, deliveries | Both `ENABLED`; both `disabled` |
+| Lambda | `AY3K…`; user ID valid and equal to `terraform.tfvars` (value not shown) |
+| Ledgers | Both rows: shadow OK, no `notified_*`, no lease |
+| Natural failures since 19:47 | None: 204 of 204 HTTPUp minutes present, 0 failed; no EC2 or Spot event; no alarm history entry |
+| Budget | Availability 99.34 %, 67.0 minutes consumed, 33.8 left, coverage 100 % |
+| Other | Readiness `ready`; both EC2 `ok`; no SSM command in progress; no workflow running |
+
+**Plan (regenerated from `c76e547`).** 0 to add, 1 to change, 0 to
+destroy. The Lambda `environment` is the only change:
+`BURN_RATE_DELIVERY` and `CONTINUOUS_FAILURE_DELIVERY` go `disabled` →
+`enabled`. The other 12 variables and the code are identical, and
+everything else is no-op. The text plan had no user ID.
+
+**Apply (Runbook §13.5).**
+
+- **Immediately before** (23:12:40): both alarms OK, unchanged since
+  19:33:53 and 18:42:41.
+- **Apply:** 23:12:40–23:12:47 JST, 0 added, 1 changed, 0 destroyed.
+- **Immediately after** (23:12:47): both alarms OK, with the same
+  update times.
+
+**After apply** (snapshots before and after; runtime checks at 23:19:20
+JST).
+
+| Check | Result |
+|---|---|
+| Rules | Both `ENABLED`, rules and targets unchanged; HTTP probe rule unchanged |
+| Deliveries | Both `enabled` |
+| Lambda | `CodeSha256` `AY3K…` unchanged; `Active` / `Successful`; runtime, timeout, memory, role and handler unchanged. `LastModified` 23:12:42 (the environment update) |
+| Environment | 14 keys. Only the two deliveries changed (hash comparison). User ID present, valid and equal to `terraform.tfvars` |
+| Alarms | Both configurations unchanged; both OK; no state update since the apply |
+| IAM, permissions | Unchanged |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 23:10–23:18 JST |
+| Lambda (23:13–23:19 JST) | 6 invocations, 0 errors, 0 throttles. Max duration 3.8 s, max memory 95 MB of 128, one cold start (init 340 ms) after the environment update |
+| Log | 22 lines: 0 error or warning lines, 0 alarm-notification lines |
+| Rule invocations | 0 on both alarm rules, as expected with no state change |
+| Unintended Discord messages | None |
+| Ledgers | Both rows keep the shadow ledger (OK at 18:42:41 and 19:33:53); live ledger and lease empty, as expected without a new alarm event |
+| DynamoDB HTTP row | `up`, 0 failures |
+| Readiness | HTTP 200, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+**Evidence.** Kept outside the repository with checksums:
+
+- the snapshots, the alarm states before and after, the apply log with
+  the account ID masked;
+- the plan summary, the check output and script.
+
+A scan found no user ID in it.
+
+No second stop, `set-alarm-state` or test message was used. Stage 4
+was accepted as PASS by the Product Owner.
+
+## 7. P2 completion record
+
+**Completion conditions.**
+
+| Condition | Status |
+|---|---|
+| Both alarms in production, CloudWatch-native, no new Lambda, SNS, table or EC2 | Done |
+| Alarm notifications through the existing Lambda, relay and Discord channel | Done |
+| Staged rollout `off` → `shadow` → `live`, each stage approved and checked | Done |
+| One planned stop under `shadow`; both alarms OK → ALARM → OK | Done (§5) |
+| HIGH / LOW Discord priority with a device test | Done ([Priority As-Built §8](./availability-notification-priority-as-built-2026-11-28.md#8-device-test-2026-11-28)) |
+| Records without secrets or the Discord user ID | Done (repository scan of the whole branch) |
+
+**What is in production** (LIVE since 2026-11-28 23:12:47 JST).
+
+| Alarm | Condition | Missing data | Messages |
+|---|---|---|---|
+| Burn rate `gmsv5-availability-burn-rate-fast` | `HTTPUp` (`Minimum`, 60 s) `< 1` in 9 of the last 60 minutes (15x burn rate of a 99 % / 7-day SLO) | `missing` | ALARM and DATA INSUFFICIENT: HIGH with the mention. NORMALIZED and DATA RESTORED: LOW |
+| Continuous failure `gmsv5-availability-continuous-failure` | `< 1` in the 6 most recent datapoints (sliding window) | `missing` | Same |
+
+Each message carries `Now` (latest HTTP check), the last 60 completed
+minutes and the failure pattern. Each alarm has its own state row, live
+and shadow ledgers, lease, rule and delivery variable. The user ID is
+only in `terraform.tfvars` (not in Git) and in the Lambda configuration.
+
+**Verification, by kind** (do not merge the kinds).
+
+| Kind | Scope | Result |
+|---|---|---|
+| Local regression tests | 308 tests; network blocked | All pass |
+| Mutation tests | 78 mutations on copies, each copy first passing unmutated | 78 / 78 detected |
+| Isolated CloudWatch integration tests | 9/60 (2026-11-27, 7 cases); 6/6 (2026-11-28, 4 variants × 11 cases including continuous late data) in separate namespaces | Measured; drove the choice of `missing` and the sliding window |
+| Production shadow integration test | One 12-minute planned stop with both alarms in `shadow` (§5): real alarm evaluation, EventBridge delivery, Lambda processing, ledgers, masked payloads | PASS |
+| Device notification test | Synthetic HIGH and LOW messages through the production path to Discord and the iPhone | LOW PASS; first HIGH arrived with the mention but no push; HIGH Retry 1 PASS |
+
+**Not verified end to end.** No real outage has been delivered in
+`live` from the alarm to the iPhone. `live` delivery is verified by
+combining two tests:
+
+- the production shadow test, which ran the same evaluation, events,
+  processing and payloads, with only the send disabled;
+- the device test, which used the same send path, payload format and
+  mention.
+
+**Error budget.**
+
+- 55.0 minutes consumed at 17:25 JST.
+- The planned stop added 12 failed minutes (18:29–18:40 JST).
+- 67.0 consumed (66.47 %) and 33.8 left at 23:11 JST, with availability
+  99.34 % and coverage 100 %.
+
+**Residual risks (accepted, not resolved).**
+
+- The Lambda's maximum memory reached 112 MB of 128 MB. Not changed;
+  under observation.
+- The Spot stop reason is updated asynchronously. A user stop was
+  recorded as `marked-for-stop`.
+- HIGH pushes depend on Discord and iOS settings outside Terraform. A
+  Focus mode, desktop activity or device controls can suppress a push.
+- No `live` delivery of a real outage has been observed yet.
+- Only 33.8 minutes of error budget were left at 23:11 JST. Natural Spot
+  interruptions can take availability below 99 % before 2026-12-01
+  20:26 JST.
+- The existing Spot capacity risk remains: a stopped instance can fail
+  to start, and there is no automatic recovery.
+- The alarms and their messages share the Lambda with the HTTP probe.
+  There is no DLQ and no meta-alarm (Runbook §13.3, §13.4).
+
+**CI/CD effect of merging this branch.**
+
+- **What changes.** The branch changes only
+  `infra/terraform/availability/` (Terraform, Lambda source, tests) and
+  `docs/infrastructure/`. The application source is unchanged.
+- **What the merge runs.** `ci.yml` runs on the pull request: the
+  Quality Gate, including the 308 availability tests, and a report-only
+  Trivy scan. `cd.yml` runs on every push to `main`, with no path
+  filter, and `GMSV5_CD_ENABLED` is `true`. So a merge builds, publishes
+  and deploys the merge commit to the Application EC2.
+- **Restart.** The release SHA changes to the merge commit, so the engine
+  does not report `ALREADY_DEPLOYED`. It switches `/opt/gmsv5/current`
+  and restarts `gmsv5.service` (`systemctl restart`, 90 s bound).
+- **Rollback.** Zero-downtime is not guaranteed. A failed health check
+  is rolled back automatically (outcome 20 `ROLLED_BACK`; 21 requires
+  disabling CD).
+- **No migration.** The database schema fingerprint is unchanged, so
+  the automatic path accepts the release.
+- **Terraform and Lambda.** No workflow runs Terraform. The availability
+  Lambda, alarms, rules and IAM are not changed by CI/CD.
+- **During the deployment,** a short restart could cost an HTTPUp
+  minute and send the existing LOW deployment and HTTP messages. It
+  cannot raise the 6/6 alarm unless it lasts 6 minutes.
