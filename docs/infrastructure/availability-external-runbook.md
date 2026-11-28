@@ -1415,7 +1415,8 @@ The same as §13.7, for this alarm and rule:
 
 ## 15. Discord notification priority
 
-**Status (2026-11-28): implemented and tested locally. Not applied.**
+**Status (2026-11-28): applied in stage `off` at 16:13 JST, with the user
+ID set.** No test message sent yet.
 [Notification Priority As-Built](./availability-notification-priority-as-built-2026-11-28.md).
 
 ### 15.1 Policy

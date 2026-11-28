@@ -1,12 +1,14 @@
 # GMS v5 — Discord Notification Priority As-Built (2026-11-28)
 
-- **Evidence date:** 2026-11-28 JST
+- **Evidence date:** 2026-11-28 JST (applied in stage `off` 16:13:15–16:13:28 JST, §7)
 - **Owner:** Infrastructure / SRE
 - **Scope:** `infra/terraform/availability/` only. The `#gms-alerts` channel, the webhook, the CloudFront relay (`discord-alert-egress`), IAM and the alarms are unchanged.
 - **Current status:**
-  - **Implemented and tested locally. Not applied.**
-  - No test message sent.
-  - The user ID is not yet set in `terraform.tfvars`.
+  - **Applied in stage `off` (§7).** The user ID is set in `terraform.tfvars`
+    and in the Lambda.
+  - Both alarm rules are `DISABLED` and both deliveries `disabled`, so no
+    alarm message is sent.
+  - No test message sent yet.
 - **Design and operation:** [Availability Runbook §15](./availability-external-runbook.md#15-discord-notification-priority)
 
 > **Evidence classes.**
@@ -140,9 +142,10 @@ as LOW, without a mention.
 
 ## 6. Terraform plan
 
-Production configuration, read only (2026-11-28). Not applied.
+Production configuration, read only (2026-11-28), before the ID was set.
 `terraform.tfvars` did not exist yet, so `discord_alert_user_id` was
-empty.
+empty. The plan applied in §7 was regenerated after the Product Owner
+set the ID.
 
 - **0 to add, 1 to change, 0 to destroy:** `aws_lambda_function.availability`
   only.
@@ -152,18 +155,72 @@ empty.
 - No-op: IAM, both alarms, rules, targets and permissions, the HTTP probe
   rule, the table and the relay module (separate root, not planned).
 
-## 7. Before `shadow` and `live`
+## 7. Apply (stage `off`, 2026-11-28)
 
-1. Write the real ID to `terraform.tfvars` on the Operator's Mac:
-   `discord_alert_user_id = "<ID>"`.
-2. Plan and check:
-   - only `DISCORD_ALERT_USER_ID` changes;
-   - the value has 17–20 digits;
-   - mask it in any evidence.
-3. After approval, apply and send the two test messages (Runbook §15.4).
-   Confirm that HIGH pinged the intended user and LOW pinged nobody.
+Approved by the Product Owner on 2026-11-28, after the Product Owner set
+the user ID in `terraform.tfvars`. Production configuration, inspected by
+the Operator. **The ID was never printed.** Every check below compared it
+inside a script and printed only true or false. The snapshots record
+only "present", "valid format" and "equals `terraform.tfvars`", not the
+value or a hash of it.
 
-## 8. Residual risks
+**Before apply.**
+
+- HEAD `a1c9d8b`, clean working tree.
+- `terraform.tfvars` ignored by Git and not tracked. It sets only
+  `discord_alert_user_id`, once, in a valid 17–20 digit format.
+- AWS SSO role `AdministratorAccess`, `ap-northeast-1`, workspace
+  `default`.
+- Regenerated plan: 0 to add, 1 to change, 0 to destroy. Only
+  `aws_lambda_function.availability` changes: code, environment and the
+  computed `last_modified`.
+- Artifact `AY3KE7zQPDNa0HvEUKUgmtVyxV37bEHmKShMXqLNpv4=` (5 files equal to
+  the commit).
+- Environment: the 13 existing variables identical by value, plus
+  `DISCORD_ALERT_USER_ID`, equal to the `terraform.tfvars` value and
+  sensitive in the plan.
+- The text plan did not contain the ID.
+- Both alarm rules `DISABLED`; both deliveries `disabled`.
+
+**Apply.** The saved plan was applied at 16:13:15–16:13:28 JST: 0 added,
+1 changed, 0 destroyed. The Lambda update took 11 s.
+
+**After apply** (snapshots before and after; runtime checks at 16:19:59
+JST).
+
+| Check | Result |
+|---|---|
+| Lambda | `CodeSha256` `NRgr…` → `AY3KE7zQPDNa0HvEUKUgmtVyxV37bEHmKShMXqLNpv4=`; `Successful` / `Active`; runtime, 90 s timeout, 128 MB, role and handler unchanged |
+| Environment | 14 variables. The 13 existing ones identical by value. `DISCORD_ALERT_USER_ID`: present, valid format, equal to `terraform.tfvars` (value not shown). Both deliveries `disabled` |
+| Alarms | Both configurations identical. Burn rate `OK` since 2026-11-27 21:42 JST; continuous failure `OK` since 03:29:41 JST |
+| Rules, targets, permissions | Identical. Both alarm rules `DISABLED`; HTTP probe rule `ENABLED` |
+| IAM | Inline policy, policy names and attached policies identical |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 16:11–16:18 JST (8 minutes across the apply) |
+| Lambda metrics (16:14–16:19 JST) | 5 invocations, 0 errors, 0 throttles |
+| Lambda log | 22 lines: 0 error or warning lines (so no mention warning), 0 alarm-notification lines. Max memory 95 MB of 128. Max duration 3.6 s. One cold start, init 262 ms |
+| DynamoDB | HTTP row `up`, 0 failures, last slot 16:19 JST; no `burnrate#` or `contfail#` row |
+| Readiness | HTTP 200 in 0.40 s, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+**Evidence.** The evidence folder outside the repository holds:
+
+- the before and after snapshots and the apply log, with the account ID
+  masked;
+- the plan summary, the post-apply output and the scripts;
+- SHA-256 checksums.
+
+A scan found the ID in none of these files. The JSON plan, which
+contains the ID in plain text, was not kept and was deleted from the
+working directory.
+
+## 8. Before `shadow` and `live`
+
+1. After approval, send the two test messages (Runbook §15.4). Confirm
+   that HIGH pinged the intended user and LOW pinged nobody.
+2. Keep `terraform.tfvars` with the ID on the Mac used for applies.
+   The precondition refuses a `live` plan without it.
+
+## 9. Residual risks
 
 - **Whether a ping reaches the person depends on Discord.** The user
   must be a member who can see the channel. Notification settings and
@@ -184,7 +241,7 @@ empty.
   configuration and JSON plans (`terraform show -json` prints sensitive
   values). None of them is public, but mask the ID in evidence.
 
-## 9. Evidence handling
+## 10. Evidence handling
 
 This document contains no Discord user ID, webhook path, relay token,
 AWS account ID, credential or Terraform State. Tests use an ID built at
