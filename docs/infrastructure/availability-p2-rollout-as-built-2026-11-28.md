@@ -4,7 +4,8 @@
 - **Owner:** Infrastructure / SRE
 - **Scope:** the two availability alarms (burn rate 9/60, continuous failure 6/6) moving from `off` to `shadow`, the planned stop test, and `live`. Code and configuration as of `973ae68`; no new feature.
 - **Current status:**
-  - **Stage 1 (`shadow`): see §3.**
+  - **Stage 1 done: both alarms in `shadow` since 18:02:27 JST (§3).**
+    Rules `ENABLED`, deliveries `disabled`.
   - Stages 2–5 (final pre-stop checks, planned stop, `live`, completion) not started; each needs its own approval.
 - **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
 - **Related:**
@@ -123,4 +124,40 @@ the sequence, and no check is skipped to finish today.
 - Readiness `ready`.
 - AWS SSO credentials valid until 23:19 JST.
 
-**Plan and apply:** recorded below after the apply.
+**Plan (from `d9c5806`, read only).**
+
+- 0 to add, 2 to change, 0 to destroy: `aws_cloudwatch_event_rule.burn_rate`
+  and `aws_cloudwatch_event_rule.continuous_failure`. Only `state`
+  changes, `DISABLED` → `ENABLED`.
+- Everything else no-op: the Lambda (code, the 14 variables, both
+  deliveries), IAM, the alarms, targets, permissions, the HTTP probe, the
+  table and the relay.
+- The text plan did not contain the user ID.
+
+**Apply.** 18:02:25–18:02:27 JST: 0 added, 2 changed, 0 destroyed.
+
+**After apply** (snapshots before and after; runtime checks at 18:09:05
+JST).
+
+| Check | Result |
+|---|---|
+| Rules | Both `DISABLED` → `ENABLED`; patterns and targets unchanged; HTTP probe rule unchanged |
+| Deliveries | Both `disabled` |
+| Lambda | `CodeSha256` `AY3K…`, `LastModified`, the 14 variables (hash comparison), timeout, memory and role all unchanged. User ID present, valid and equal to `terraform.tfvars` (value not shown) |
+| Alarms | Both configurations unchanged; both `OK`; no state update since the apply |
+| IAM, permissions | Unchanged |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 18:00–18:08 JST (9 minutes across the apply) |
+| Lambda metrics (18:03–18:09 JST) | 5 invocations (probes), 0 errors, 0 throttles. Max duration 0.42 s, max memory 100 MB of 128, no cold start |
+| Lambda log | 21 lines: 0 error or warning lines, 0 burn rate, shadow or notified lines |
+| Rule invocations | `gmsv5-availability-burn-rate` and `gmsv5-availability-continuous-failure`: 0 invocations, 0 failed. Expected: no alarm state change |
+| DynamoDB | HTTP row `up`, 0 failures; no `burnrate#` or `contfail#` row |
+| Unintended Discord messages | None: no notify path ran (no HTTP failure, no alarm event) |
+| Readiness | HTTP 200, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+No natural failure occurred during the checks. The evidence (snapshots,
+apply log with the account ID masked, plan summary, check output and
+scripts, checksums) is kept outside the repository. A scan found no
+user ID in it.
+
+**Stopped here for approval of Stage 2.**
