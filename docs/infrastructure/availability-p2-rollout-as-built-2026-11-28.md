@@ -12,7 +12,9 @@
     back to OK by 19:33:53 (§5).
   - **Stage 4 done: both alarms `live` since 23:12:47 JST (§6).** Rules
     `ENABLED`, deliveries `enabled`.
-  - Stage 5 (completion) not started; it needs its own approval.
+  - **Official LIVE start: 2026-11-28 23:12:47 JST** (Product Owner).
+  - Stage 5 (completion): final record in §7. Push and PR follow;
+    Merge needs its own approval.
 - **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
 - **Related:**
   - [Burn Rate As-Built](./availability-burn-rate-as-built-2026-11-27.md)
@@ -412,5 +414,97 @@ JST).
 
 A scan found no user ID in it.
 
-**Stopped here for approval of Stage 5.** No second stop,
-`set-alarm-state`, test message, Push or Merge.
+No second stop, `set-alarm-state` or test message was used. Stage 4
+was accepted as PASS by the Product Owner.
+
+## 7. P2 completion record
+
+**Completion conditions.**
+
+| Condition | Status |
+|---|---|
+| Both alarms in production, CloudWatch-native, no new Lambda, SNS, table or EC2 | Done |
+| Alarm notifications through the existing Lambda, relay and Discord channel | Done |
+| Staged rollout `off` → `shadow` → `live`, each stage approved and checked | Done |
+| One planned stop under `shadow`; both alarms OK → ALARM → OK | Done (§5) |
+| HIGH / LOW Discord priority with a device test | Done ([Priority As-Built §8](./availability-notification-priority-as-built-2026-11-28.md#8-device-test-2026-11-28)) |
+| Records without secrets or the Discord user ID | Done (repository scan of the whole branch) |
+
+**What is in production** (LIVE since 2026-11-28 23:12:47 JST).
+
+| Alarm | Condition | Missing data | Messages |
+|---|---|---|---|
+| Burn rate `gmsv5-availability-burn-rate-fast` | `HTTPUp` (`Minimum`, 60 s) `< 1` in 9 of the last 60 minutes (15x burn rate of a 99 % / 7-day SLO) | `missing` | ALARM and DATA INSUFFICIENT: HIGH with the mention. NORMALIZED and DATA RESTORED: LOW |
+| Continuous failure `gmsv5-availability-continuous-failure` | `< 1` in the 6 most recent datapoints (sliding window) | `missing` | Same |
+
+Each message carries `Now` (latest HTTP check), the last 60 completed
+minutes and the failure pattern. Each alarm has its own state row, live
+and shadow ledgers, lease, rule and delivery variable. The user ID is
+only in `terraform.tfvars` (not in Git) and in the Lambda configuration.
+
+**Verification, by kind** (do not merge the kinds).
+
+| Kind | Scope | Result |
+|---|---|---|
+| Local regression tests | 308 tests; network blocked | All pass |
+| Mutation tests | 78 mutations on copies, each copy first passing unmutated | 78 / 78 detected |
+| Isolated CloudWatch integration tests | 9/60 (2026-11-27, 7 cases); 6/6 (2026-11-28, 4 variants × 11 cases including continuous late data) in separate namespaces | Measured; drove the choice of `missing` and the sliding window |
+| Production shadow integration test | One 12-minute planned stop with both alarms in `shadow` (§5): real alarm evaluation, EventBridge delivery, Lambda processing, ledgers, masked payloads | PASS |
+| Device notification test | Synthetic HIGH and LOW messages through the production path to Discord and the iPhone | LOW PASS; first HIGH arrived with the mention but no push; HIGH Retry 1 PASS |
+
+**Not verified end to end.** No real outage has been delivered in
+`live` from the alarm to the iPhone. `live` delivery is verified by
+combining two tests:
+
+- the production shadow test, which ran the same evaluation, events,
+  processing and payloads, with only the send disabled;
+- the device test, which used the same send path, payload format and
+  mention.
+
+**Error budget.**
+
+- 55.0 minutes consumed at 17:25 JST.
+- The planned stop added 12 failed minutes (18:29–18:40 JST).
+- 67.0 consumed (66.47 %) and 33.8 left at 23:11 JST, with availability
+  99.34 % and coverage 100 %.
+
+**Residual risks (accepted, not resolved).**
+
+- The Lambda's maximum memory reached 112 MB of 128 MB. Not changed;
+  under observation.
+- The Spot stop reason is updated asynchronously. A user stop was
+  recorded as `marked-for-stop`.
+- HIGH pushes depend on Discord and iOS settings outside Terraform. A
+  Focus mode, desktop activity or device controls can suppress a push.
+- No `live` delivery of a real outage has been observed yet.
+- Only 33.8 minutes of error budget were left at 23:11 JST. Natural Spot
+  interruptions can take availability below 99 % before 2026-12-01
+  20:26 JST.
+- The existing Spot capacity risk remains: a stopped instance can fail
+  to start, and there is no automatic recovery.
+- The alarms and their messages share the Lambda with the HTTP probe.
+  There is no DLQ and no meta-alarm (Runbook §13.3, §13.4).
+
+**CI/CD effect of merging this branch.**
+
+- **What changes.** The branch changes only
+  `infra/terraform/availability/` (Terraform, Lambda source, tests) and
+  `docs/infrastructure/`. The application source is unchanged.
+- **What the merge runs.** `ci.yml` runs on the pull request: the
+  Quality Gate, including the 308 availability tests, and a report-only
+  Trivy scan. `cd.yml` runs on every push to `main`, with no path
+  filter, and `GMSV5_CD_ENABLED` is `true`. So a merge builds, publishes
+  and deploys the merge commit to the Application EC2.
+- **Restart.** The release SHA changes to the merge commit, so the engine
+  does not report `ALREADY_DEPLOYED`. It switches `/opt/gmsv5/current`
+  and restarts `gmsv5.service` (`systemctl restart`, 90 s bound).
+- **Rollback.** Zero-downtime is not guaranteed. A failed health check
+  is rolled back automatically (outcome 20 `ROLLED_BACK`; 21 requires
+  disabling CD).
+- **No migration.** The database schema fingerprint is unchanged, so
+  the automatic path accepts the release.
+- **Terraform and Lambda.** No workflow runs Terraform. The availability
+  Lambda, alarms, rules and IAM are not changed by CI/CD.
+- **During the deployment,** a short restart could cost an HTTPUp
+  minute and send the existing LOW deployment and HTTP messages. It
+  cannot raise the 6/6 alarm unless it lasts 6 minutes.
