@@ -8,7 +8,9 @@
     and in the Lambda.
   - Both alarm rules are `DISABLED` and both deliveries `disabled`, so no
     alarm message is sent.
-  - No test message sent yet.
+  - **Device test done (§8):** LOW passed; HIGH passed on Retry 1 after
+    a Discord setting change. The first HIGH reached Discord with the
+    mention but gave no iPhone push.
 - **Design and operation:** [Availability Runbook §15](./availability-external-runbook.md#15-discord-notification-priority)
 
 > **Evidence classes.**
@@ -213,18 +215,74 @@ A scan found the ID in none of these files. The JSON plan, which
 contains the ID in plain text, was not kept and was deleted from the
 working directory.
 
-## 8. Before `shadow` and `live`
+## 8. Device test (2026-11-28)
 
-1. After approval, send the two test messages (Runbook §15.4). Confirm
-   that HIGH pinged the intended user and LOW pinged nobody.
-2. Keep `terraform.tfvars` with the ID on the Mac used for applies.
-   The precondition refuses a `live` plan without it.
+Test messages through the production path: synthetic test event →
+Lambda → CloudFront relay → Discord `#gms-alerts`. Each was approved
+separately and sent once, with a new test ID. No alarm state row,
+`set-alarm-state` or EC2 was involved, and the AWS code and configuration
+were not changed. Device results were confirmed by the Product Owner on
+the iPhone.
 
-## 9. Residual risks
+| Test | Sent (JST) | Lambda and delivery | Discord | iPhone push | Result |
+|---|---|---|---|---|---|
+| LOW `priority-low-20261128T0727Z` | 16:27:12 | 200, `{"synthetic": true, "new": true}`; relay accepted; no warning | Arrived, no mention | None (expected) | **PASS** |
+| HIGH `priority-high-20261128T0736Z` | 16:35:58 | 200, `"priority": "high"`; relay accepted; no mention warning | Arrived with the mention | **None** | **FAIL** |
+| HIGH Retry 1 `priority-high-retry1-20261128T0800Z` | 16:59:57 invoked, 16:59:58 arrived | 200, `"priority": "high"`; relay accepted; no mention warning | Arrived with the mention | Lock screen, app badge and the in-app mention | **PASS** |
 
-- **Whether a ping reaches the person depends on Discord.** The user
-  must be a member who can see the channel. Notification settings and
-  Do Not Disturb apply, and a mobile push is not guaranteed.
+- **Lambda side, every test:**
+  - each test wrote one dedup row `synthetic#<id>` and one `TestSignal`;
+  - 0 Lambda errors and throttles;
+  - no warning in the log, and no 17–20 digit number in it;
+  - `HTTPUp` stayed 1;
+  - no `burnrate#` or `contfail#` row;
+  - both alarms `OK`, both rules `DISABLED`, both deliveries `disabled`.
+- **Delivery delay:** almost immediate, but not measured.
+- **First HIGH failure.** The exact cause is not established. Before
+  Retry 1, the Product Owner set Discord's mobile push inactivity timeout
+  to 1 minute, checked the server, channel and iOS settings, and waited
+  before the send. Discord received the same payload both times, so the
+  difference is on the Discord app or device side, not in AWS.
+- **Evidence:** responses, invoke metadata, masked tail logs, check
+  output and summaries are kept outside the repository with checksums.
+  A scan found no user ID in them.
+
+**Operating prerequisites outside Terraform.** HIGH pushes rely on these
+Discord and iOS settings. Re-check them after a device change, an app
+reinstall or any settings change, with a HIGH test message (Runbook
+§15.4).
+
+| Setting | Required |
+|---|---|
+| Discord server and channel notification setting | Only @mentions |
+| Server and channel mute | Off |
+| Discord mobile push notifications | On |
+| Discord mobile push inactivity timeout | 1 minute |
+| iOS: Discord notifications, lock screen, sound | Allowed / on |
+
+**Known limitation.** A HIGH message can be delivered with a valid
+mention and still produce no push or sound:
+
+- an iOS Focus mode;
+- Discord being active on a desktop (push is held during the inactivity
+  timeout);
+- other device notification controls.
+
+AWS cannot detect this. The message is still in `#gms-alerts`.
+
+## 9. Before `shadow` and `live`
+
+- Keep `terraform.tfvars` with the ID on the Mac used for applies. The
+  precondition refuses a `live` plan without it.
+- Re-run the HIGH test message after any change to the prerequisites
+  above.
+
+## 10. Residual risks
+
+- **Whether a ping reaches the person depends on Discord and the
+  device.** This was seen in the first HIGH test (§8). The prerequisites
+  in §8 must hold, and Focus modes, desktop activity or device controls
+  can still suppress the push or sound.
 - **A wrong but well-formed ID** pings someone else or nobody, without
   an error. The HIGH test message catches this.
 - **Another checkout without `terraform.tfvars`** would plan the ID back
@@ -241,7 +299,7 @@ working directory.
   configuration and JSON plans (`terraform show -json` prints sensitive
   values). None of them is public, but mask the ID in evidence.
 
-## 10. Evidence handling
+## 11. Evidence handling
 
 This document contains no Discord user ID, webhook path, relay token,
 AWS account ID, credential or Terraform State. Tests use an ID built at

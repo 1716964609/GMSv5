@@ -1416,7 +1416,8 @@ The same as §13.7, for this alarm and rule:
 ## 15. Discord notification priority
 
 **Status (2026-11-28): applied in stage `off` at 16:13 JST, with the user
-ID set.** No test message sent yet.
+ID set. Device test done:** LOW passed; HIGH passed on Retry 1 after a
+Discord setting change (§15.5).
 [Notification Priority As-Built](./availability-notification-priority-as-built-2026-11-28.md).
 
 ### 15.1 Policy
@@ -1499,4 +1500,65 @@ aws lambda invoke --profile gms-admin --region ap-northeast-1 \
   nothing.
 
 Confirm in Discord that the HIGH message pinged the intended user and the
-LOW one did not.
+LOW one did not. Confirm on the phone that HIGH gave a push and LOW did
+not.
+
+### 15.5 Device prerequisites and limitations
+
+Device test on 2026-11-28:
+
+- LOW at 16:27:12 passed: no push.
+- The first HIGH at 16:35:58 reached Discord with the mention but gave no
+  iPhone push.
+- HIGH Retry 1 at 16:59:58 passed: lock screen, badge and in-app mention.
+  It was sent after the Discord mobile push inactivity timeout was set to
+  1 minute and the settings were checked.
+- The cause of the first failure is not established. Delivery was almost
+  immediate but not measured.
+- Record: [As-Built §8](./availability-notification-priority-as-built-2026-11-28.md#8-device-test-2026-11-28).
+
+Settings outside Terraform. Re-check them, with a HIGH test message,
+after a device change, an app reinstall or a settings change.
+
+| Setting | Required |
+|---|---|
+| Discord server and channel notification setting | Only @mentions |
+| Server and channel mute | Off |
+| Discord mobile push notifications | On |
+| Discord mobile push inactivity timeout | 1 minute |
+| iOS: Discord notifications, lock screen, sound | Allowed / on |
+
+**Known limitation.** A valid HIGH mention can still give no push or
+sound:
+
+- an iOS Focus mode;
+- Discord being active on a desktop;
+- other device notification controls.
+
+AWS cannot detect this; the message stays in `#gms-alerts`.
+
+## 16. Planned stop test: preconditions
+
+**Not approved or scheduled.** This section records the preconditions
+agreed on 2026-11-28 before the procedure is written. It does not replace
+§7 or §11.
+
+- **Duration.** Plan for more than 1 hour. The burn rate alarm (9 of 60)
+  normalizes only after at least 52 non-breaching minutes (§13.1). The
+  test is complete only after both alarms are back to OK.
+- **The planned stop time is not a bound on the outage.** A planned stop
+  of 12 minutes is the intended stop duration, not an upper limit on the
+  real service outage. Restart, the Spot request and the application
+  start can take longer.
+- **Spot capacity.** Automatic recovery from a Spot capacity shortage is
+  out of scope. Recovery is manual.
+- **Before the stop,** agree in writing:
+  - the concrete manual recovery steps (start command, checks and who
+    acts);
+  - what to do if the instance cannot start, for example because of
+    Spot capacity: the alternative, such as a changed instance type,
+    an On-Demand fallback or the DR procedure in the
+    [Disaster Recovery Runbook](./disaster-recovery-runbook.md);
+  - the decision points and their times.
+- **Stages.** Which alarm stages (`shadow` or `live`) are active during
+  the test is decided with the test approval.
