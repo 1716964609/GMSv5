@@ -6,7 +6,7 @@
 - **Current status:**
   - **Applied in stage `off`.** The alarm evaluates. The rule is `DISABLED` and nothing is sent.
   - **CloudWatch evaluation measured** in an isolated test.
-  - **Message redesign (§6) applied in stage `off` on 2026-11-28 01:37 JST (§7).** Its code path has not run in production yet: nothing invokes it while the rule is `DISABLED`.
+  - **Message redesign (§6) applied in stage `off` on 2026-11-28 01:37 JST (§7).** Its code path first ran in production during the `shadow` planned stop test that day.
   - **`shadow` from 2026-11-28 18:02 JST and `live` from 23:12:47 JST**:
     [P2 Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
     The code path ran in production during the planned stop test.
