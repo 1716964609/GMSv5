@@ -1537,28 +1537,140 @@ sound:
 
 AWS cannot detect this; the message stays in `#gms-alerts`.
 
-## 16. Planned stop test: preconditions
+## 16. Planned stop test and LIVE rollout
 
-**Not approved or scheduled.** This section records the preconditions
-agreed on 2026-11-28 before the procedure is written. It does not replace
-§7 or §11.
+**Decision (Product Owner, 2026-11-28).** The earlier plan to wait until
+2026-12-01 was withdrawn. The full sequence runs today, one approved
+stage at a time:
 
-- **Duration.** Plan for more than 1 hour. The burn rate alarm (9 of 60)
-  normalizes only after at least 52 non-breaching minutes (§13.1). The
-  test is complete only after both alarms are back to OK.
-- **The planned stop time is not a bound on the outage.** A planned stop
-  of 12 minutes is the intended stop duration, not an upper limit on the
-  real service outage. Restart, the Spot request and the application
-  start can take longer.
-- **Spot capacity.** Automatic recovery from a Spot capacity shortage is
-  out of scope. Recovery is manual.
-- **Before the stop,** agree in writing:
-  - the concrete manual recovery steps (start command, checks and who
-    acts);
-  - what to do if the instance cannot start, for example because of
-    Spot capacity: the alternative, such as a changed instance type,
-    an On-Demand fallback or the DR procedure in the
-    [Disaster Recovery Runbook](./disaster-recovery-runbook.md);
-  - the decision points and their times.
-- **Stages.** Which alarm stages (`shadow` or `live`) are active during
-  the test is decided with the test approval.
+1. `shadow` for both alarms.
+2. One planned stop of the Application EC2 (12 minutes, manual start).
+   The Observability EC2 is not stopped.
+3. Both alarms back to OK.
+4. `live`.
+5. As-Built, Push and Merge.
+
+No stage is skipped to finish today. Every safety condition still stops
+the sequence. Record: [P2 Production Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
+
+### 16.1 Accepted risks (not resolved)
+
+Accepted by the Product Owner for this experimental environment:
+
+- **Error budget.** At 2026-11-28 17:25 JST: SLO 99 % / rolling 7 days,
+  availability 99.45 %, budget 100.8 minutes, 55.0 consumed, 45.8 left,
+  coverage 100 %. A 12-minute stop plus about 2 minutes of start leaves
+  about 31.8 minutes. Natural Spot interruptions (7.9 failed minutes per
+  day on average over the last 7 days) can push availability below 99 %
+  before 11-24's 44 failed minutes leave the window (2026-12-01 20:26 JST).
+- **No guaranteed restart.** A user-stopped persistent Spot instance is
+  not started by AWS, and a start needs Spot capacity (§16.3). The
+  recovery time is not guaranteed.
+- **No extra snapshot.** The daily DLM snapshot of the data volume is
+  used; no snapshot is taken before the stop. Reason: no recent data
+  changes or new users.
+
+Other conditions:
+
+- **Duration.** About 90 minutes. The 9-of-60 alarm needs at least 52
+  non-breaching minutes before OK (§13.1). The test ends only when both
+  alarms are OK.
+- **The planned stop time is not an outage bound.** 12 minutes is the
+  intended stop time, not an upper limit on the real outage.
+- **No automatic recovery** from a Spot capacity shortage is added.
+  Recovery is manual.
+- **No other changes.** No `set-alarm-state`, no second stop and no stop
+  test after `live`.
+
+### 16.2 Facts the procedure relies on (read only, 2026-11-28)
+
+- **Instance.** `i-0decf6bc205e273d9`: t4g.small (arm64) in
+  ap-northeast-1a. Persistent Spot request with interruption behavior
+  `stop`. Stop protection is off.
+- **Network.** The primary ENI `gmsv5-primary-eni` carries the IPv6
+  address that `origin-v5` (AAAA, TTL 60) points to. A primary ENI
+  cannot be detached.
+- **Data.** SQLite is on `/mnt/gms-data`, a separate encrypted gp3 EBS
+  (`gmsv5-sqlite-data`, DeleteOnTermination false, `prevent_destroy`).
+  The data volume has DLM daily snapshots; the root volume has no
+  snapshot.
+- **Start.** `gmsv5.service` starts at boot (Boot Recovery units). In
+  the 7 days before the test, 20 AWS-initiated Spot stops each recovered
+  to HTTP 200 in 57–117 s.
+- **AWS documentation:**
+  - after a user stop the Spot request is `disabled`
+    (`instance-stopped-by-user`);
+  - AWS does not start it again;
+  - a start needs capacity;
+  - the instance type of a stopped Spot instance cannot be changed.
+- **Delivery during the test.** HTTP DOWN/RECOVERED and EC2 RECOVERED are
+  real LOW Discord messages. In `shadow`, the alarm messages are only
+  logged.
+
+### 16.3 Manual stop, start and recovery
+
+Mac zsh, with the common options as an array:
+
+```bash
+P=(--profile gms-admin --region ap-northeast-1)
+I=i-0decf6bc205e273d9
+
+# T0: stop (record the time of this command)
+aws ec2 stop-instances "${P[@]}" --instance-ids $I
+aws ec2 describe-instances "${P[@]}" --instance-ids $I --query 'Reservations[0].Instances[0].State.Name'
+aws ec2 describe-spot-instance-requests "${P[@]}" --spot-instance-request-ids sir-rmf7nbph \
+  --query 'SpotInstanceRequests[0].[State,Status.Code]'      # disabled / instance-stopped-by-user
+
+# T0+12: start (poll instead of an open-ended waiter)
+aws ec2 start-instances "${P[@]}" --instance-ids $I
+aws ec2 describe-instances "${P[@]}" --instance-ids $I --query 'Reservations[0].Instances[0].State.Name'
+
+# Recovery checks
+aws ssm describe-instance-information "${P[@]}" --filters Key=InstanceIds,Values=$I \
+  --query 'InstanceInformationList[0].PingStatus'            # Online
+curl -sS https://sunlightjetrans.com/api/health/ready         # ready, expected release
+curl -sS -o /dev/null -w '%{http_code}\n' https://sunlightjetrans.com/   # 200
+```
+
+Check that HTTPUp returns to 1 and that the incident row goes
+`stopped` → `running` → `recovered` with proof `http200`. Do not use
+`aws ec2 wait` without a bound: it can run past T0+12 or a decision time.
+If needed, check systemd and the mount through SSM
+(`systemctl is-active gmsv5.service`, `findmnt /mnt/gms-data`); this
+needs approval because it runs commands on the host.
+
+**If the start fails** (no Spot capacity):
+
+- AWS does not retry after a user stop.
+- Check the instance state and the Spot request status, then call
+  `start-instances` again every 2 minutes. Do not repeat it while the
+  instance is `pending`.
+- The exact error form for a capacity failure is not documented and
+  was not tested.
+
+| Time | Action |
+|---|---|
+| T0+15 | Not running: report to the Product Owner; keep retrying |
+| T0+25 | Decision point A: start preparing the alternative in parallel? |
+| T0+40 | Decision point B: switch to the alternative, or keep waiting as maintenance? |
+
+**Alternative (not verified in production; each step needs separate
+approval).** The DR Runbook path (§4–§8):
+
+1. Snapshot the stopped data volume, so data is kept up to the stop and
+   the original is untouched.
+2. Restore it to a new volume for an On-Demand arm64 instance in 1a.
+3. Install the runtime and release.
+4. Move `origin-v5` to the new IPv6 through Terraform. This needs an
+   origin certificate (HTTP-01 ordering), a security group for the
+   CloudFront prefix list and the origin authentication header.
+
+The isolated drill reached application recovery in 308 s. The production
+cutover has never been run; expect more than an hour.
+
+Not used:
+
+- changing the instance type (not allowed for a stopped Spot instance);
+- terminating the instance so that the persistent request relaunches
+  (the root volume and the installed application would be deleted, and a
+  launch still needs Spot capacity).

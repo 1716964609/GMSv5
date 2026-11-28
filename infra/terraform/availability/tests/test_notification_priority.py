@@ -222,6 +222,62 @@ class SyntheticTests(HandlerCase):
         self.h.save_event.assert_not_called()
 
 
+class ShadowStageEndToEndTests(HandlerCase):
+    """Rule ENABLED + DELIVERY disabled: the production shadow stage, through handler.handler."""
+
+    def setUp(self):
+        super().setUp()
+        from fake_dynamodb import FakeTable
+        self.table = FakeTable()
+        env = {"BURN_RATE_ALARM_NAME": NAME, "BURN_RATE_ALARM_ARN": ARN,
+               "BURN_RATE_DELIVERY": "disabled", "CONTINUOUS_FAILURE_ALARM_NAME": CF_NAME,
+               "CONTINUOUS_FAILURE_ALARM_ARN": CF_ARN, "CONTINUOUS_FAILURE_DELIVERY": "disabled"}
+
+        class Context:
+            def lines(self, state_at):
+                return ["Now: DOWN — 7 min (since first failed check 08:49 JST); 7 consecutive failed checks",
+                        "Last 60 completed min (…): failed 7 / ok 53 / missing 0",
+                        "Pattern: 1 observed episode, longest 7 min"]
+        for p in (patch.dict(os.environ, env),
+                  patch.object(self.h, "table", return_value=self.table),
+                  patch.object(self.h, "burn_rate_context", return_value=Context())):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_events(self, events):
+        with self.assertLogs(br.LOG, "INFO") as logs:
+            results = [self.h.handler(e) for e in events]
+        records = [json.loads(r.getMessage()) for r in logs.records
+                   if r.getMessage().startswith('{"burn_rate": "shadow"')]
+        return results, records, "\n".join(r.getMessage() for r in logs.records)
+
+    def test_both_alarms_alarm_and_normalize_in_shadow(self):
+        events = [cf_event("ALARM", T1), alarm_event("ALARM", T1),
+                  cf_event("ALARM", T1), alarm_event("ALARM", T1),          # duplicates
+                  cf_event("OK", T2, previous="ALARM"), alarm_event("OK", T3, previous="ALARM")]
+        results, records, text = self.run_events(events)
+        self.assertEqual([r["sent"] for r in results], [
+            ["shadow:alarm"], ["shadow:alarm"], [], [], ["shadow:normalized"], ["shadow:normalized"]])
+        self.assertEqual(self.sent.bodies, [])                 # nothing reached urlopen
+        by = {(r["alarm"], r["would_send"]): r for r in records}
+        self.assertEqual(len(records), 4)
+        for alarm in ("continuous_failure", "burn_rate"):
+            high, low = by[(alarm, "alarm")], by[(alarm, "normalized")]
+            self.assertEqual((high["delivered"], high["priority"], high["mention"]), (False, "high", True))
+            self.assertEqual(high["payload"]["allowed_mentions"], {"users": ["USER_ID_MASKED"]})
+            self.assertTrue(high["payload"]["content"].startswith("<@USER_ID_MASKED> HIGH — "))
+            self.assertEqual(high["payload"]["content"], "<@USER_ID_MASKED> " + high["message"])
+            self.assertIn("Now: DOWN — 7 min", high["message"])
+            self.assertEqual((low["priority"], low["mention"]), ("low", False))
+            self.assertEqual(low["payload"]["allowed_mentions"], {"parse": []})
+        self.assertNotIn(TEST_ID, text)
+        for key in (("burnrate#" + NAME, "~STATE"), ("contfail#" + CF_NAME, "~STATE")):
+            row = self.table.row(*key)
+            self.assertEqual(row["shadow_notified_state"], "OK")
+            self.assertFalse([k for k in ("notified_state", "notified_at", "lease_at", "lease_until")
+                              if k in row], row)
+
+
 class AlarmPriorityTests(unittest.TestCase):
     """ALARM and DATA INSUFFICIENT of both alarms are HIGH; NORMALIZED and DATA RESTORED are LOW."""
 

@@ -346,7 +346,8 @@ class TerraformConsistencyTests(unittest.TestCase):
         self.assertRegex(ARN, r"^arn:aws:cloudwatch:ap-northeast-1:\d{12}:alarm:" + re.escape(NAME) + "$")
         rollout = re.search(r'variable "continuous_failure_alarm_rollout" \{(.*?)\n\}',
                             tf("variables.tf"), re.S).group(1)
-        self.assertIn('default = "off"', rollout)
+        # The committed stage; each stage change is its own reviewed commit.
+        self.assertIn('default = "shadow"', rollout)
 
     def test_no_iam_change_and_burn_rate_resources_untouched(self):
         self.assertNotIn("aws_iam", tf("continuous_failure.tf"))
