@@ -7,7 +7,9 @@
   - **Applied in stage `off`.** The alarm evaluates. The rule is `DISABLED` and nothing is sent.
   - **CloudWatch evaluation measured** in an isolated test.
   - **Message redesign (§6) applied in stage `off` on 2026-11-28 01:37 JST (§7).** Its code path has not run in production yet: nothing invokes it while the rule is `DISABLED`.
-  - **`shadow` and `live` not started.**
+  - **`shadow` from 2026-11-28 18:02 JST and `live` from 23:12:47 JST**:
+    [P2 Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
+    The code path ran in production during the planned stop test.
 - **Design and operation:** [Availability Runbook §13](./availability-external-runbook.md#13-availability-burn-rate-alarm-p2)
 - **Earlier record:** [Spot Reason Tracking As-Built 2026-11-25](./spot-reason-tracking-as-built-2026-11-25.md)
 

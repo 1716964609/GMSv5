@@ -10,7 +10,8 @@
   - **Stage 3 done:** planned stop at 18:29:33 JST, manual start at
     18:41:34. Both alarms went OK → ALARM → OK in `shadow` and were
     back to OK by 19:33:53 (§5).
-  - **Stage 4 (`live`): prepared and planned, not applied (§6).**
+  - **Stage 4 done: both alarms `live` since 23:12:47 JST (§6).** Rules
+    `ENABLED`, deliveries `enabled`.
   - Stage 5 (completion) not started; it needs its own approval.
 - **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
 - **Related:**
@@ -298,7 +299,7 @@ ACTIVE after the restart without manual action.
 A scan found no user ID in it. SetAlarmState was not used and there was
 no second stop.
 
-## 6. Stage 4 — `live` (prepared, not applied)
+## 6. Stage 4 — `live`
 
 **Checks before the change (read only, 19:47 JST).**
 
@@ -351,5 +352,65 @@ written; live never reads it (Runbook §13.5).
 - The text plan shows the environment as sensitive and does not contain
   the ID.
 
-**Not applied.** Apply needs separate approval. Immediately before and
-after it, both alarms must be checked to be OK (Runbook §13.5).
+That plan was approved and then regenerated before the apply.
+
+**Re-check before the apply (read only, 23:11–23:12 JST).** The check
+of 19:47 was more than three hours old, so everything was read again.
+
+| Check | Result |
+|---|---|
+| SSO | Renewed; valid until 07:11 JST (2026-11-29) |
+| Repository | HEAD `c76e547`, clean |
+| Alarms | Both OK (burn rate since 19:33:53, continuous failure since 18:42:41); no state update since 19:47 |
+| Rules, deliveries | Both `ENABLED`; both `disabled` |
+| Lambda | `AY3K…`; user ID valid and equal to `terraform.tfvars` (value not shown) |
+| Ledgers | Both rows: shadow OK, no `notified_*`, no lease |
+| Natural failures since 19:47 | None: 204 of 204 HTTPUp minutes present, 0 failed; no EC2 or Spot event; no alarm history entry |
+| Budget | Availability 99.34 %, 67.0 minutes consumed, 33.8 left, coverage 100 % |
+| Other | Readiness `ready`; both EC2 `ok`; no SSM command in progress; no workflow running |
+
+**Plan (regenerated from `c76e547`).** 0 to add, 1 to change, 0 to
+destroy. The Lambda `environment` is the only change:
+`BURN_RATE_DELIVERY` and `CONTINUOUS_FAILURE_DELIVERY` go `disabled` →
+`enabled`. The other 12 variables and the code are identical, and
+everything else is no-op. The text plan had no user ID.
+
+**Apply (Runbook §13.5).**
+
+- **Immediately before** (23:12:40): both alarms OK, unchanged since
+  19:33:53 and 18:42:41.
+- **Apply:** 23:12:40–23:12:47 JST, 0 added, 1 changed, 0 destroyed.
+- **Immediately after** (23:12:47): both alarms OK, with the same
+  update times.
+
+**After apply** (snapshots before and after; runtime checks at 23:19:20
+JST).
+
+| Check | Result |
+|---|---|
+| Rules | Both `ENABLED`, rules and targets unchanged; HTTP probe rule unchanged |
+| Deliveries | Both `enabled` |
+| Lambda | `CodeSha256` `AY3K…` unchanged; `Active` / `Successful`; runtime, timeout, memory, role and handler unchanged. `LastModified` 23:12:42 (the environment update) |
+| Environment | 14 keys. Only the two deliveries changed (hash comparison). User ID present, valid and equal to `terraform.tfvars` |
+| Alarms | Both configurations unchanged; both OK; no state update since the apply |
+| IAM, permissions | Unchanged |
+| HTTP probe | `HTTPUp` = 1, one sample per minute, 23:10–23:18 JST |
+| Lambda (23:13–23:19 JST) | 6 invocations, 0 errors, 0 throttles. Max duration 3.8 s, max memory 95 MB of 128, one cold start (init 340 ms) after the environment update |
+| Log | 22 lines: 0 error or warning lines, 0 alarm-notification lines |
+| Rule invocations | 0 on both alarm rules, as expected with no state change |
+| Unintended Discord messages | None |
+| Ledgers | Both rows keep the shadow ledger (OK at 18:42:41 and 19:33:53); live ledger and lease empty, as expected without a new alarm event |
+| DynamoDB HTTP row | `up`, 0 failures |
+| Readiness | HTTP 200, `ready`, release `0b72c3a` |
+| Plan after apply | No changes |
+
+**Evidence.** Kept outside the repository with checksums:
+
+- the snapshots, the alarm states before and after, the apply log with
+  the account ID masked;
+- the plan summary, the check output and script.
+
+A scan found no user ID in it.
+
+**Stopped here for approval of Stage 5.** No second stop,
+`set-alarm-state`, test message, Push or Merge.

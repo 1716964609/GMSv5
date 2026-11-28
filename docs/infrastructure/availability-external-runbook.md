@@ -709,8 +709,9 @@ evidence.
   HTTP state and a count of the last 60 minutes (§13.4, §13.11). The
   Lambda role has `cloudwatch:GetMetricData`. Checks after apply passed
   ([As-Built §7](./availability-burn-rate-as-built-2026-11-27.md#7-redesign-apply-stage-off-2026-11-28)).
-- **Not done:** `shadow`, `live`, and delivery through EventBridge to the
-  Lambda.
+- **`shadow` from 18:02 JST.** The planned stop test passed (ALARM
+  18:38:53, OK 19:33:53).
+- **Live since 2026-11-28 23:12:47 JST** ([P2 Rollout As-Built §6](./availability-p2-rollout-as-built-2026-11-28.md#6-stage-4--live)): rule `ENABLED`, delivery `enabled`.
 
 Record applies in a dated As-Built, not here.
 
@@ -1213,9 +1214,8 @@ sent anyway. The log line is `Burn rate context <part> unavailable: <code>`.
 
 ## 14. Continuous failure alarm (6 of 6)
 
-**Status (2026-11-28): applied in stage `off` at 03:29 JST.** The alarm
-evaluates. Its rule is `DISABLED` and `CONTINUOUS_FAILURE_DELIVERY` is
-`disabled`, so nothing is sent. CloudWatch's evaluation was measured in
+**Status (2026-11-28): applied at 03:29 JST, `shadow` from 18:02, and the
+planned stop test passed (ALARM 18:35:41, OK 18:42:41).** **Live since 2026-11-28 23:12:47 JST** ([P2 Rollout As-Built §6](./availability-p2-rollout-as-built-2026-11-28.md#6-stage-4--live)): rule `ENABLED`, delivery `enabled`. CloudWatch's evaluation was measured in
 an isolated integration test. The missing-data choice (§14.2) was
 confirmed by the Product Owner.
 Record applies in a dated As-Built
@@ -1415,8 +1415,8 @@ The same as §13.7, for this alarm and rule:
 
 ## 15. Discord notification priority
 
-**Status (2026-11-28): applied in stage `off` at 16:13 JST, with the user
-ID set. Device test done:** LOW passed; HIGH passed on Retry 1 after a
+**Status (2026-11-28): applied at 16:13 JST, with the user ID set; in use
+since `live` at 23:12:47 JST. Device test done:** LOW passed; HIGH passed on Retry 1 after a
 Discord setting change (§15.5).
 [Notification Priority As-Built](./availability-notification-priority-as-built-2026-11-28.md).
 
@@ -1557,7 +1557,9 @@ the sequence. Progress on 2026-11-28:
 - Planned stop at 18:29:33, start at 18:41:34.
 - Both alarms OK again at 19:33:53.
 - The stop test passed.
-- `live` was prepared but not yet applied. Record: [P2 Production Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
+- `live` was applied at 23:12:40–23:12:47 JST. Both alarms were OK
+  before and after.
+- Stage 5 (completion: Push, PR and Merge) needs its own approval. Record: [P2 Production Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
 
 ### 16.1 Accepted risks (not resolved)
 

@@ -9,7 +9,8 @@
     sent.
   - CloudWatch evaluation measured in an isolated test.
   - Missing-data choice confirmed by the Product Owner (§4).
-  - `shadow` and `live` not started.
+  - **`shadow` from 2026-11-28 18:02 JST and `live` from 23:12:47 JST**:
+    [P2 Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
 - **Design and operation:** [Availability Runbook §14](./availability-external-runbook.md#14-continuous-failure-alarm-6-of-6)
 - **Related:** [Burn Rate Alarm As-Built](./availability-burn-rate-as-built-2026-11-27.md)
 

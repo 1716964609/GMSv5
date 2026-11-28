@@ -6,8 +6,9 @@
 - **Current status:**
   - **Applied in stage `off` (§7).** The user ID is set in `terraform.tfvars`
     and in the Lambda.
-  - Both alarm rules are `DISABLED` and both deliveries `disabled`, so no
-    alarm message is sent.
+  - Both alarms have been `live` since 2026-11-28 23:12:47 JST:
+    [P2 Rollout As-Built](./availability-p2-rollout-as-built-2026-11-28.md).
+    HIGH alarm messages now mention the configured user.
   - **Device test done (§8):** LOW passed; HIGH passed on Retry 1 after
     a Discord setting change. The first HIGH reached Discord with the
     mention but gave no iPhone push.
