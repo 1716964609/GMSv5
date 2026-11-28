@@ -334,4 +334,22 @@ written; live never reads it (Runbook §13.5).
 - Mutation runs on copies, each first checked to pass unmutated:
   78 / 78 detected.
 
-**Plan:** recorded below after it is generated from the commit.
+**Plan (from `2073ad1`, read only, 2026-11-28).**
+
+- **0 to add, 1 to change, 0 to destroy:** `aws_lambda_function.availability`
+  only.
+- Only `environment` changes:
+  - `BURN_RATE_DELIVERY` `disabled` → `enabled`;
+  - `CONTINUOUS_FAILURE_DELIVERY` `disabled` → `enabled`.
+- The other 12 variables are identical, including `DISCORD_ALERT_USER_ID`,
+  which equals `terraform.tfvars` (compared without printing). There are
+  14 keys before and after.
+- `source_code_hash` is unchanged (`AY3K…`), and `last_modified` is not
+  even marked as changing.
+- No-op: IAM, both alarms, both rules (`ENABLED`), both targets, both
+  permissions, the HTTP probe rule, the table and the relay.
+- The text plan shows the environment as sensitive and does not contain
+  the ID.
+
+**Not applied.** Apply needs separate approval. Immediately before and
+after it, both alarms must be checked to be OK (Runbook §13.5).
