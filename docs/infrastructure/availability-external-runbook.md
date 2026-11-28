@@ -1412,3 +1412,90 @@ The same as §13.7, for this alarm and rule:
   evidence, where failures were contiguous.
 - Delivery is at least once; no DLQ (§13.4). Worker slots (§13.11) are
   shared with the burn rate alarm.
+
+## 15. Discord notification priority
+
+**Status (2026-11-28): implemented and tested locally. Not applied.**
+[Notification Priority As-Built](./availability-notification-priority-as-built-2026-11-28.md).
+
+### 15.1 Policy
+
+All messages go to the existing `#gms-alerts` channel through the same
+webhook and CloudFront relay. Priority is a Discord user mention:
+
+| Priority | Messages | Payload |
+|---|---|---|
+| HIGH | Burn rate and continuous failure: ALARM and DATA INSUFFICIENT. The HIGH synthetic test | `content` starts with `<@USER_ID> `; `allowed_mentions` = `{"users": ["USER_ID"]}`, without `parse` |
+| LOW | Both alarms' NORMALIZED and DATA RESTORED; HTTP DOWN/RECOVERED; EC2 RECOVERED; Spot warning and rebalance; deployment; the default synthetic test | Unchanged: `allowed_mentions` = `{"parse": []}` |
+
+- **No other mention can ping.**
+  - HIGH lists only the one user, and without `parse` Discord parses
+    no roles, `@everyone` or `@here`.
+  - LOW parses nothing.
+  - Discord documents `parse` as mutually exclusive with the other
+    fields, so HIGH omits it.
+- **The mention survives truncation.** It comes first, and truncation
+  to 1,800 characters only cuts the message.
+- **UptimeRobot (§9)** stays without mentions.
+- **Relay.** The CloudFront function `auth.js` only checks the token and
+  rewrites the URI; CloudFront Functions cannot read the body. The
+  payload reaches Discord unchanged.
+
+### 15.2 The user ID
+
+- **Terraform variable `discord_alert_user_id`:**
+  - `sensitive = true`;
+  - default `""`;
+  - validation: empty, or 17–20 digits.
+- **Lambda variable `DISCORD_ALERT_USER_ID`.**
+- **Set it only in `terraform.tfvars`.** This file is not in Git
+  (`*.tfvars` in `.gitignore`); `terraform.tfvars.example` shows the line
+  with a placeholder. The real ID is never in code, tests, fixtures or
+  documents. Plan output shows `(sensitive value)`. The ID is in the
+  local State and the Lambda configuration, which are not public.
+- **Precondition.** The Lambda resource refuses a plan when
+  `burn_rate_alarm_rollout` or `continuous_failure_alarm_rollout` is
+  `live` and the ID is empty.
+- **Lambda.** If the ID is missing or not 17–20 digits, HIGH messages go
+  out without a mention, as LOW, with the warning `Discord mention
+  disabled: DISCORD_ALERT_USER_ID missing or invalid`. The value is never
+  logged.
+- **Another checkout.** On a checkout without `terraform.tfvars`, a plan
+  would set the variable to empty. Before every apply, check the plan for
+  a change to `DISCORD_ALERT_USER_ID`. Read the JSON plan: the text plan
+  hides the whole environment as sensitive. `terraform show -json`
+  prints sensitive values in plain text, so mask the ID before keeping
+  JSON plans or excerpts as evidence.
+
+### 15.3 Shadow
+
+Shadow log lines (§13.5) also carry:
+
+- `priority` (`high` or `low`);
+- `mention` (whether a mention would be added);
+- `payload`, the exact payload with the ID replaced by `USER_ID_MASKED`.
+
+### 15.4 Test messages (each needs approval)
+
+The existing synthetic test sends through the real path, with no EC2 or
+alarm involved:
+
+```bash
+# LOW (unchanged default)
+aws lambda invoke --profile gms-admin --region ap-northeast-1 \
+  --function-name gmsv5-availability --cli-binary-format raw-in-base64-out \
+  --payload '{"source":"gmsv5.manual-test","test_mode":true,"id":"priority-low-<date>"}' /dev/null
+# HIGH (mentions the configured user; message says TEST and "no incident")
+aws lambda invoke --profile gms-admin --region ap-northeast-1 \
+  --function-name gmsv5-availability --cli-binary-format raw-in-base64-out \
+  --payload '{"source":"gmsv5.manual-test","test_mode":true,"id":"priority-high-<date>","priority":"high"}' /dev/null
+```
+
+- **`priority`:** only `low` (or omitted) and `high` are accepted.
+  Anything else returns `{"rejected": "invalid priority"}`, with nothing
+  written or sent.
+- **`id`:** each `id` sends once; a repeat with the same `id` sends
+  nothing.
+
+Confirm in Discord that the HIGH message pinged the intended user and the
+LOW one did not.

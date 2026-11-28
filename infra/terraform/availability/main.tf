@@ -176,6 +176,17 @@ resource "aws_lambda_function" "availability" {
       CONTINUOUS_FAILURE_ALARM_NAME = local.continuous_failure_alarm_name
       CONTINUOUS_FAILURE_ALARM_ARN  = local.continuous_failure_alarm_arn
       CONTINUOUS_FAILURE_DELIVERY   = var.continuous_failure_alarm_rollout == "live" ? "enabled" : "disabled"
+
+      # Discord user mentioned on HIGH messages (variables.tf; sensitive, not in Git).
+      DISCORD_ALERT_USER_ID = var.discord_alert_user_id
+    }
+  }
+  lifecycle {
+    precondition {
+      condition = var.discord_alert_user_id != "" || (
+        var.burn_rate_alarm_rollout != "live" && var.continuous_failure_alarm_rollout != "live"
+      )
+      error_message = "Set discord_alert_user_id in terraform.tfvars (not in Git) before any alarm rollout is live."
     }
   }
   depends_on = [aws_iam_role_policy.lambda_runtime, aws_cloudwatch_log_group.lambda]

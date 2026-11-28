@@ -144,6 +144,10 @@ def owed(item: dict, ledger: str = LIVE_LEDGER) -> str | None:
     return None
 
 
+# Discord priority: these mention the on-call user (handler.notify_high); the
+# rest (NORMALIZED, DATA RESTORED) are LOW and never mention anyone.
+HIGH_KINDS = frozenset({"alarm", "insufficient"})
+
 KINDS = {
     "alarm": ("HIGH", "ALARM"),
     "normalized": ("HIGH", "NORMALIZED (alarm back to OK)"),
@@ -348,7 +352,8 @@ def shadow_mark(table, key: dict, at: str, state: str) -> bool:
 
 
 def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: str,
-              context=None, profile: Profile = BURN_RATE):
+              context=None, profile: Profile = BURN_RATE, notify_high=None,
+              shadow_payload=None):
     """Send (live) or log (shadow) what the current state is owed.
 
     Live and shadow keep separate ledgers (notified_* and shadow_notified_*),
@@ -375,15 +380,23 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
             if not shadow_mark(table, key, at, item["alarm_state"]):
                 continue  # State or shadow ledger changed. Re-read and decide again.
             text = message(kind, item, alarm_name, context_lines(context, item), profile)
-            LOG.info(json.dumps({"burn_rate": "shadow", "delivered": False, "would_send": kind,
-                                 "state_at": at, "alarm": profile.key, "message": text},
-                                ensure_ascii=False))
+            record = {"burn_rate": "shadow", "delivered": False, "would_send": kind,
+                      "state_at": at, "alarm": profile.key, "message": text,
+                      "priority": "high" if kind in HIGH_KINDS else "low"}
+            if shadow_payload is not None:
+                try:
+                    # Exact payload with the user ID masked.
+                    record.update(shadow_payload(text, high=kind in HIGH_KINDS))
+                except Exception as exc:  # noqa: BLE001 - logging must not stop shadow.
+                    record["payload_error"] = type(exc).__name__
+            LOG.info(json.dumps(record, ensure_ascii=False))
             sent.append("shadow:" + kind)
             continue
         if not claim(table, key, at, now):
             continue  # State, delivery or lease changed. Re-read and decide again.
+        send = notify_high if (notify_high is not None and kind in HIGH_KINDS) else notify
         try:
-            notify(message(kind, item, alarm_name, context_lines(context, item), profile))
+            send(message(kind, item, alarm_name, context_lines(context, item), profile))
         except Exception:
             release(table, key, at)
             LOG.error(json.dumps({"burn_rate": "notify_failed", "kind": kind, "state_at": at}))
@@ -396,11 +409,14 @@ def reconcile(table, key: dict, *, notify, now: int, deliver: bool, alarm_name: 
 
 
 def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
-           delivery: str, context=None, profile: Profile = BURN_RATE):
+           delivery: str, context=None, profile: Profile = BURN_RATE, notify_high=None,
+           shadow_payload=None):
     """context: burn_rate_context.Context (or None: messages say "not read").
 
     profile selects the message text and the state row; the name and ARN
     checks, ordering, lease and ledgers are the same for every alarm.
+    notify_high sends HIGH_KINDS (with a mention); without it, notify sends all.
+    shadow_payload(text, high=...) adds the masked payload to shadow logs.
     """
     change = parse(event, alarm_name=alarm_name, alarm_arn=alarm_arn)
     if isinstance(change, str):
@@ -416,5 +432,6 @@ def handle(event: dict, *, table, notify, now, alarm_name: str, alarm_arn: str,
     # Duplicates and stale events still reconcile: a retry may complete a failed send.
     sent = reconcile(table, key, notify=notify, now=int(moment.timestamp()),
                      deliver=delivery == "enabled", alarm_name=alarm_name, context=context,
-                     profile=profile)
+                     profile=profile, notify_high=notify_high,
+                     shadow_payload=shadow_payload)
     return {"burn_rate": outcome, "alarm_state": change["alarm_state"], "sent": sent}

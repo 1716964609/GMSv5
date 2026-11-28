@@ -3,3 +3,6 @@
 # dynamodb_billing_mode = "PROVISIONED"
 # After a tested CloudWatch datasource connection from Grafana:
 # attach_grafana_read_policy = true
+# Discord user mentioned on HIGH alarm messages (17-20 digits). Keep the real
+# value only in terraform.tfvars; required before any alarm rollout is live.
+# discord_alert_user_id = "<your Discord user ID>"

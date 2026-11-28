@@ -81,3 +81,18 @@ variable "continuous_failure_alarm_rollout" {
     error_message = "Use off, shadow or live."
   }
 }
+
+# Discord user mentioned on HIGH alarm messages (ALARM and DATA INSUFFICIENT
+# of both alarms). Set ONLY in terraform.tfvars, which is not in Git (*.tfvars
+# in .gitignore). Empty = no mention; the Lambda then sends HIGH messages
+# without a mention and logs a warning. A precondition on the Lambda refuses a
+# plan with an alarm rollout at "live" and no ID.
+variable "discord_alert_user_id" {
+  type      = string
+  default   = ""
+  sensitive = true
+  validation {
+    condition     = can(regex("^([0-9]{17,20})?$", var.discord_alert_user_id))
+    error_message = "Use an empty string or a 17-20 digit Discord user ID."
+  }
+}

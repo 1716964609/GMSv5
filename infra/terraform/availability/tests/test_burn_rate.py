@@ -632,6 +632,7 @@ class HandlerRoutingTests(unittest.TestCase):
                   patch("boto3.resource", side_effect=AssertionError("real AWS resource")),
                   patch.object(self.handler, "table", return_value=self.table),
                   patch.object(self.handler, "notify", side_effect=self.sent.append),
+                  patch.object(self.handler, "notify_high", side_effect=self.sent.append),
                   patch.object(self.handler, "metric", side_effect=AssertionError("metric")),
                   patch.object(self.handler, "probe_http", side_effect=AssertionError("probe")),
                   patch.object(self.handler, "burn_rate_context", side_effect=self.fake_context)):

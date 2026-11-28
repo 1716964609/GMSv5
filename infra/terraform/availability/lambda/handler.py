@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -80,12 +81,57 @@ def relay_token():
     )["Parameter"]["Value"].strip()
 
 
-def notify(message: str):
+DISCORD_CONTENT_LIMIT = 1800       # below Discord's 2000; unchanged
+DISCORD_USER_ID = re.compile(r"[0-9]{17,20}")
+MASKED_USER_ID = "USER_ID_MASKED"
+
+
+def alert_user_id():
+    """The Discord user to mention on HIGH messages, or None (then no mention)."""
+    value = os.environ.get("DISCORD_ALERT_USER_ID", "")
+    if isinstance(value, str) and DISCORD_USER_ID.fullmatch(value):
+        return value
+    # Never log the value itself.
+    LOG.warning("Discord mention disabled: DISCORD_ALERT_USER_ID missing or invalid")
+    return None
+
+
+def discord_payload(message: str, *, user: str | None = None) -> dict:
+    """LOW (user None): no mention can ping. HIGH: only `user` can be pinged.
+
+    HIGH puts the mention first, so truncation never removes it, and lists the
+    user in allowed_mentions.users without `parse` (Discord: parse is mutually
+    exclusive with the other fields). Roles, @everyone and @here are never
+    parsed in either case.
+    """
+    if user:
+        prefix = f"<@{user}> "
+        return {"content": prefix + message[:DISCORD_CONTENT_LIMIT - len(prefix)],
+                "allowed_mentions": {"users": [user]}}
+    return {"content": message[:DISCORD_CONTENT_LIMIT], "allowed_mentions": {"parse": []}}
+
+
+def masked_payload(message: str, *, high: bool) -> dict:
+    """The payload as it would be sent, with the user ID masked. For shadow logs."""
+    user = alert_user_id() if high else None
+    payload = discord_payload(message, user=user)
+    if user:
+        payload["content"] = payload["content"].replace(user, MASKED_USER_ID, 1)
+        payload["allowed_mentions"] = {"users": [MASKED_USER_ID]}
+    return {"priority": "high" if high else "low", "mention": bool(user), "payload": payload}
+
+
+def notify_high(message: str):
+    """HIGH priority: mention the configured user. Without a valid ID, send as LOW."""
+    notify(message, mention=True)
+
+
+def notify(message: str, mention: bool = False):
     """Call the existing PUBLIC CloudFront directly; the private Nginx relay is unreachable."""
     url = os.environ["DISCORD_CLOUDFRONT_URL"]
     if not url.startswith("https://") or not url.endswith("/notify"):
         raise ValueError("Invalid HTTPS Discord CloudFront URL")
-    body = json.dumps({"content": message[:1800], "allowed_mentions": {"parse": []}}).encode()
+    body = json.dumps(discord_payload(message, user=alert_user_id() if mention else None)).encode()
     request = urllib.request.Request(
         url,
         data=body,
@@ -499,6 +545,9 @@ def handler(event: dict, context=None):
     cfg = configuration()
     # Synthetic smoke test never pretends a real EC2 was stopped.
     if event.get("source") == "gmsv5.manual-test" and event.get("test_mode") is True:
+        priority = event.get("priority", "low")
+        if priority not in ("low", "high"):
+            return {"synthetic": True, "rejected": "invalid priority"}
         at = timestamp(now_utc())
         mock = {"time": at, "id": event.get("id", "manual-test"), "detail": {}}
         created = save_event(
@@ -507,8 +556,15 @@ def handler(event: dict, context=None):
         )
         if created:
             metric("TestSignal", 1, dimension="synthetic", unit="Count")
-            notify(f"[GMS v5 AVAILABILITY TEST] synthetic path OK at {at}; no EC2 stop")
-        return {"synthetic": True, "new": created}
+            if priority == "high":
+                notify_high(f"[GMS v5 AVAILABILITY TEST] HIGH priority TEST at {at}; "
+                            "mention path check only, no incident, no EC2 stop")
+            else:
+                notify(f"[GMS v5 AVAILABILITY TEST] synthetic path OK at {at}; no EC2 stop")
+        result = {"synthetic": True, "new": created}
+        if priority == "high":
+            result["priority"] = "high"
+        return result
     # A one-minute EventBridge scheduled event probes independently of EC2 event delivery.
     if event.get("source") == "aws.events" and event.get("detail-type") == "Scheduled Event":
         available = probe_http()
@@ -557,5 +613,7 @@ def handler(event: dict, context=None):
             delivery=os.environ.get(delivery_var, "disabled"),
             context=burn_rate_context(context),
             profile=profile,
+            notify_high=notify_high,
+            shadow_payload=masked_payload,
         )
     return {"ignored": "unsupported source"}
