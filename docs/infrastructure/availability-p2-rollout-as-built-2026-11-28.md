@@ -6,7 +6,12 @@
 - **Current status:**
   - **Stage 1 done: both alarms in `shadow` since 18:02:27 JST (§3).**
     Rules `ENABLED`, deliveries `disabled`.
-  - Stages 2–5 (final pre-stop checks, planned stop, `live`, completion) not started; each needs its own approval.
+  - **Stage 2 done:** final pre-stop checks, 12 of 12 PASS (§4).
+  - **Stage 3 done:** planned stop at 18:29:33 JST, manual start at
+    18:41:34. Both alarms went OK → ALARM → OK in `shadow` and were
+    back to OK by 19:33:53 (§5).
+  - Stages 4–5 (`live`, completion) not started; each needs its own
+    approval.
 - **Procedure:** [Availability Runbook §16](./availability-external-runbook.md#16-planned-stop-test-and-live-rollout)
 - **Related:**
   - [Burn Rate As-Built](./availability-burn-rate-as-built-2026-11-27.md)
@@ -160,4 +165,104 @@ apply log with the account ID masked, plan summary, check output and
 scripts, checksums) is kept outside the repository. A scan found no
 user ID in it.
 
-**Stopped here for approval of Stage 2.**
+## 4. Stage 2 — final pre-stop checks (read only, 18:14–18:16 JST)
+
+All 12 checks passed:
+
+1. Availability 99.45 %, 55.0 minutes consumed, 45.8 left, coverage
+   100 %.
+2. The last 60 minutes had no failure and no missing minute.
+3. Both alarms OK.
+4. Both rules `ENABLED`, both deliveries `disabled`.
+5. Lambda `AY3K…`.
+6. Application and Observability EC2: running, instance, system and EBS
+   status `ok`, SSM Online.
+7. Readiness `ready`.
+8. No deployment: no SSM command in 12 hours, no open pull request, no
+   running workflow. CD is enabled, so the merge freeze holds by not
+   pushing or merging.
+9. Traffic: 6–17 CloudFront requests per 5 minutes, about the probe
+   baseline. Requests in flight cannot be seen.
+10. Latest data-volume snapshot `snap-04917fe2efa5fda6b` (04:36 JST)
+    `completed`.
+11. SSO valid until 23:19 JST.
+12. Runbook §16 reviewed. Start polling is bounded by wall-clock time.
+
+**Other conditions.**
+
+- The Spot request was `active` / `fulfilled`, with no Spot event since
+  10:52 JST.
+- The Spot price in 1a was 0.0078.
+- An immediate re-check at 18:29:22–18:29:26 JST was unchanged.
+
+## 5. Stage 3 — planned stop (2026-11-28)
+
+Approved by the Product Owner. Runbook §16.3 was used. The start was
+scripted to run once at T0+12:00, only if the instance was `stopped`,
+with a T0+15:00 wall-clock bound. A read-only watcher logged EC2, Spot,
+HTTP, readiness and alarm changes every 15 s. Times in the watcher
+column are its 15-second polls; the other times are from AWS records.
+
+| JST | T0+ | Event |
+|---|---|---|
+| 18:29:33 | 0:00 | **T0**: `stop-instances` (running → stopping) |
+| 18:29 | | First failed HTTPUp minute (probe `TimeoutError`) |
+| 18:29:44 | 0:11 | EC2 `stopped` event (event time; incident row opened) |
+| 18:30:31 | ~0:58 | Watcher: `stopped` |
+| 18:31:04 | ~1:31 | Watcher: Spot request `disabled` / `instance-stopped-by-user`. At 18:30:31 it was still `active` / `marked-for-stop` |
+| 18:35:41.7 | 6:08 | **6/6 ALARM**. Lambda accepted it at 18:35:42.0 and logged the shadow line at 18:35:42.7 |
+| 18:38:53.0 | 9:20 | **9/60 ALARM**. Accepted at 18:38:56, shadow line at 18:38:57 |
+| 18:40 | | Last failed HTTPUp minute |
+| 18:41:34 | 12:01 | `start-instances`, called once; the state was `stopped` just before |
+| 18:41:39 | 12:06 | EC2 `running` event (event time) |
+| 18:41:47 | 12:14 | `running`; SSM Online; Spot `active` / `fulfilled`. There was no capacity problem |
+| 18:41:49 | 12:16 | HTTP 200 observed by the Lambda; incident closed (`http200`, 725 s event-time downtime) |
+| 18:42:03 | 12:30 | Watcher: public HTTP 200, readiness `ready`, release `0b72c3a` |
+| 18:42:41.7 | 13:08 | **6/6 OK**; shadow line (NORMALIZED) at 18:42:42 |
+| 19:33:53.0 | 64:20 | **9/60 OK**; shadow line (NORMALIZED) |
+
+**Results** (read only, collected at 19:34–19:35 JST).
+
+| Check | Result |
+|---|---|
+| HTTPUp | 12 failed minutes, 18:29–18:40 JST; first good minute 18:41. 70 of 70 minutes present (no missing data) |
+| Alarm history vs events | 4 state updates (6/6 OK→ALARM→OK, 9/60 OK→ALARM→OK). The rules invoked the Lambda 2 + 2 times with 0 failures; 4 `accepted` lines; no duplicate or stale event |
+| Shadow lines | 4, all `"delivered": false`. ALARM ×2: `priority` high, `mention` true, `allowed_mentions` `{"users": ["USER_ID_MASKED"]}`. NORMALIZED ×2: `priority` low, `mention` false, `{"parse": []}`. In each, the payload `content` equals the mention prefix (if any) plus the message |
+| Context | All four messages had `Now` (DOWN at ALARM, UP at NORMALIZED) and the `Last 60` / `Pattern` lines. 0 "unavailable" warnings |
+| Real HIGH sends | None: 0 `notified` lines and 0 `notify_failed` |
+| DynamoDB | `contfail#` and `burnrate#` rows: state OK / previous ALARM, `shadow_notified_state` OK. **No `notified_*` and no lease** (live ledger untouched) |
+| Lambda (T0 to 19:34) | 71 invocations, 0 errors, 0 throttles. Alarm invocations 0.6–3.7 s and 93–112 MB. Max overall 14.2 s: the EC2 `running` handler, whose post-start HTTP polling is bounded below the 90 s timeout. Max memory 112 MB of 128 |
+| Log warnings | 13, all `Public HTTP probe failed: TimeoutError` during the stop: 12 scheduled probes plus 1 in the post-start polling |
+| User ID | Not in any log line or kept evidence |
+| Application | Running, readiness `ready`, public HTTP 200 since 18:42 |
+| Error budget (19:35 JST) | Availability 99.34 %, **67.0 minutes consumed (66.47 %), 33.8 left**, coverage 100 %. The test consumed 12 minutes, against 14 assumed |
+
+**Differences from the plan (recorded, not hidden).**
+
+- **Spot request status.** The Spot request became `disabled` /
+  `instance-stopped-by-user` about 30 s after `stopped`.
+- **Spot reason evidence.** The incident recorded
+  `spot_status_code` `marked-for-stop` (class `PENDING`), because its
+  reads ran before that change. The trigger was correctly `unknown`: no
+  Spot warning was seen. The user stop is therefore not identified as
+  `instance-stopped-by-user` in the incident evidence.
+- **9/60 normalization.** It came at T0+64.3 minutes, earlier than the
+  estimated T0+66–70. The estimate came from the integration test and
+  is not guaranteed.
+- **Event-time downtime.** The incident's 725 s counts from the EC2
+  `stopped` event (18:29:44) to the HTTP 200 observation (18:41:49).
+  The service was unreachable from about T0 (18:29:33).
+
+**Confirmed by the Product Owner (pending at the time of writing):**
+
+- the real LOW messages: HTTP DOWN/RECOVERED and EC2 RECOVERED;
+- UptimeRobot DOWN/UP;
+- no HIGH push.
+
+**Evidence.** Kept outside the repository with checksums:
+
+- pre-stop state, stop response, start log, watcher log;
+- final collection script and output, post-test state.
+
+A scan found no user ID in it. SetAlarmState was not used and there was
+no second stop.
